@@ -438,4 +438,65 @@ The `_format_release_output()` method artificially truncates device types compat
 - [ ] Update tests to validate complete device type display
 - [ ] Update documentation if needed
 
-### Status: 🚧 In Progress
+### Status: ✅ Complete - Ready for Tags Fix (MEN-8721)
+
+---
+
+## Bug Fix: Tags Display Truncation (TASK-20250826-1720-002 - MEN-8721)
+
+### Issue
+The `_format_releases_output()` method artificially truncates release tags list to show only first 2 tags with "+X more" indicator, preventing users from seeing complete tag information for release identification and management.
+
+### Technical Details
+- **Location**: `/src/mcp_server_mender/server.py:464-469`
+- **Root Cause**: Intentional truncation with `release.tags[:2]` for "readability"
+- **Current Code**: 
+  ```python
+  tags = [f"{t.get('key', 'N/A')}:{t.get('value', 'N/A')}" for t in release.tags[:2]]
+  output += f"  Tags: {', '.join(tags)}"
+  if len(release.tags) > 2:
+      output += f" (+{len(release.tags) - 2} more)"
+  ```
+- **Impact**: Users cannot see complete tag information for release identification
+
+### Fix Implementation Strategy
+- **Approach**: Reuse the `_format_device_types()` pattern for tags display
+- **Method**: Create new `_format_tags()` method following established pattern
+- **Line Length**: 64 characters max with smart wrapping
+- **Formatting**: 
+  - ≤3 tags: inline format `Tags: key1:value1, key2:value2, key3:value3`
+  - >3 tags: bullet point format with count `Tags (5): • key1:value1 • key2:value2 ...`
+
+### Implementation Steps
+1. **Create `_format_tags()` method** - Mirror `_format_device_types()` pattern
+2. **Update `_format_releases_output()`** - Replace truncated tags logic
+3. **Handle edge cases** - Empty tags, malformed tags, very long key:value pairs
+4. **Add comprehensive tests** - Cover all formatting scenarios
+5. **Validate consistency** - Ensure consistent behavior with device types formatting
+
+### Acceptance Criteria
+- [x] Display all tags without truncation in release output
+- [x] Use bullet point format for readability with 3+ tags
+- [x] Maintain 64 character line length limit with smart wrapping
+- [x] Handle edge cases (empty, malformed, very long tags)
+- [x] Preserve existing functionality for other fields
+- [x] Add comprehensive test coverage for all tag formatting scenarios
+- [x] Maintain consistency with device types formatting patterns
+- [x] Update documentation if needed
+
+### Code Changes Implemented
+1. **New Method**: `_format_tags(tags)` in server.py - ✅ Added
+2. **Modified Method**: `_format_releases_output()` line 464-469 - ✅ Updated
+3. **New Tests**: Tag formatting test cases in test_server.py - ✅ 6 comprehensive tests added
+4. **Updated Documentation**: PLAN.md with implementation details - ✅ Completed
+
+### Implementation Summary
+- **Created `_format_tags()` method** following the same pattern as `_format_device_types()`
+- **Inline format for ≤3 tags**: `Tags: key1:value1, key2:value2, key3:value3`
+- **Bullet format for >3 tags**: `Tags (5): • key1:value1 • key2:value2 ...`
+- **64-character line length enforced** with smart truncation (key:value...)" 
+- **Comprehensive error handling** for missing keys/values (defaults to "N/A")
+- **6 test cases added** covering all scenarios: empty, few, many, malformed, long names, line length
+- **All tests passing** - 16/16 tests pass including existing functionality
+
+### Status: ✅ Complete - MEN-8721 Resolved

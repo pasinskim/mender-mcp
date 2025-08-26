@@ -446,6 +446,39 @@ class MenderMCPServer:
         
         return output
 
+    def _format_tags(self, tags) -> str:
+        """Format tags list with bullet points and 64-char line wrapping."""
+        if not tags:
+            return ""
+        
+        # Convert tags to formatted strings
+        tag_strings = []
+        for tag in tags:
+            key = tag.get('key', 'N/A')
+            value = tag.get('value', 'N/A')
+            tag_strings.append(f"{key}:{value}")
+        
+        if len(tag_strings) <= 3:
+            # For 3 or fewer tags, use inline format
+            return f"  Tags: {', '.join(tag_strings)}\n"
+        
+        # For more than 3 tags, use bullet point format
+        output = f"  Tags ({len(tag_strings)}): \n"
+        
+        for tag_string in tag_strings:
+            # Format each tag as a bullet point
+            prefix = "    • "  # 6 characters
+            max_tag_length = 64 - len(prefix) - 3  # 3 for "..."
+            
+            if len(prefix + tag_string) <= 64:
+                output += f"{prefix}{tag_string}\n"
+            else:
+                # Wrap long tag names - truncate to fit within 64 chars
+                truncated = tag_string[:max_tag_length]
+                output += f"{prefix}{truncated}...\n"
+        
+        return output
+
     def _format_releases_output(self, releases) -> str:
         """Format releases list for output."""
         if not releases:
@@ -462,11 +495,7 @@ class MenderMCPServer:
             if release.notes:
                 output += f"  Notes: {release.notes}\n"
             if release.tags:
-                tags = [f"{t.get('key', 'N/A')}:{t.get('value', 'N/A')}" for t in release.tags[:2]]
-                output += f"  Tags: {', '.join(tags)}"
-                if len(release.tags) > 2:
-                    output += f" (+{len(release.tags) - 2} more)"
-                output += "\n"
+                output += self._format_tags(release.tags)
             # Show first artifact info if available
             if release.artifacts and len(release.artifacts) > 0:
                 artifact = release.artifacts[0]
