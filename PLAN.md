@@ -115,11 +115,13 @@ Tools (actionable operations)
 
 **Implementation Notes:**
 - All device and deployment monitoring tools implemented
-- Release management functionality added (list_releases, get_release_status)
+- Release management functionality added (list_releases, get_release_status)  
 - Read-only approach maintained (no deployment creation)
 - Basic unit tests created with pytest
 - Status checking and monitoring workflows optimized
 - CLI interface with flexible token configuration
+- Display formatting with smart truncation (device types: 3, tags: 2)
+- API pagination limits: devices (1-500, default 20), deployments (1-100, default 10), releases (1-100, default 20)
 
 ### Phase 3: Documentation & Integration (Week 3-4) ✅ COMPLETED
 **Original Advanced Features moved to Iteration 2 due to read-only scope**
@@ -195,9 +197,10 @@ Artifact:
 - download_url, checksum
 
 Release:
-- name, artifacts, modified, tags
-- notes, device_types_compatible
-- release_tags, artifact_references
+- name, artifacts, modified, tags, notes
+- artifacts_count, supports v1/v2 API formats
+- client-side filtering by name and tag
+- display truncation for readability (tags: first 2)
 ```
 
 ## Configuration
