@@ -10,6 +10,7 @@ This project provides an MCP server that enables AI assistants like Claude Code 
 
 - **Device Management**: List devices, check device status, filter by device type
 - **Deployment Tracking**: Monitor deployment status, list deployments, check deployment details
+- **Release Management**: List releases, check release details, view release artifacts and metadata
 - **Artifact Information**: View available artifacts and their compatibility
 - **Read-only Operations**: Safe monitoring and status checking (no destructive operations)
 - **Personal Access Token Authentication**: Secure API access using Mender PATs
@@ -104,6 +105,9 @@ Once configured, you can use Claude Code to interact with your Mender devices:
 - "Check the status of device abc123"
 - "What deployments are currently running?"
 - "Show me the latest deployments"
+- "What releases are available?"
+- "Show me details for release mender-demo-artifact-3.8.2"  
+- "List releases with 'demo' in the name"
 - "What artifacts are available?"
 
 ### Available Tools
@@ -114,6 +118,8 @@ The server provides these tools:
 - **list_devices**: List devices with optional filtering (status, device type, limit)
 - **get_deployment_status**: Check deployment progress and details
 - **list_deployments**: List deployments with optional filtering (status, limit)
+- **get_release_status**: Get detailed information about a specific release
+- **list_releases**: List releases with optional filtering (name, tag, limit)
 
 ### Available Resources
 
@@ -122,8 +128,10 @@ The server provides these resources:
 - **mender://devices**: Complete device inventory
 - **mender://deployments**: All deployments 
 - **mender://artifacts**: Available artifacts
+- **mender://releases**: Complete release catalog
 - **mender://devices/{device_id}**: Specific device details
 - **mender://deployments/{deployment_id}**: Specific deployment details
+- **mender://releases/{release_name}**: Specific release details
 
 ## CLI Usage
 

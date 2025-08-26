@@ -57,6 +57,8 @@ Resources (read-only data)
 ├── /deployments/{deployment_id} - Deployment details
 ├── /deployments - Deployment history and status
 ├── /artifacts - Available artifacts
+├── /releases/{release_name} - Individual release information
+├── /releases - Release catalog with filtering
 └── /device-groups - Device group information
 ```
 
@@ -67,6 +69,8 @@ Tools (actionable operations)
 ├── list_devices - List devices with filtering options
 ├── get_deployment_status - Check deployment progress
 ├── list_deployments - List deployments with filtering
+├── get_release_status - Get details of specific release
+├── list_releases - List releases with filtering options
 ├── create_deployment - Create new deployment
 ├── abort_deployment - Stop ongoing deployment
 ├── get_device_logs - Retrieve device logs (if available)
@@ -111,6 +115,7 @@ Tools (actionable operations)
 
 **Implementation Notes:**
 - All device and deployment monitoring tools implemented
+- Release management functionality added (list_releases, get_release_status)
 - Read-only approach maintained (no deployment creation)
 - Basic unit tests created with pytest
 - Status checking and monitoring workflows optimized
@@ -162,6 +167,13 @@ Deployment Management:
 Artifact Management:
 - GET /api/management/v1/deployments/artifacts
 - POST /api/management/v1/deployments/artifacts
+
+Release Management:
+- GET /api/management/v2/deployments/deployments/releases
+- GET /api/management/v1/deployments/deployments/releases
+- GET /api/management/v1/deployments/deployments/releases/list
+- GET /api/management/v2/deployments/deployments/releases/{name}
+- GET /api/management/v1/deployments/deployments/releases/{name}
 ```
 
 ### Data Models
@@ -181,6 +193,11 @@ Artifact:
 - id, name, description, size
 - device_types_compatible, created
 - download_url, checksum
+
+Release:
+- name, artifacts, modified, tags
+- notes, device_types_compatible
+- release_tags, artifact_references
 ```
 
 ## Configuration

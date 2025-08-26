@@ -48,6 +48,12 @@ class MenderMCPServer:
                     description="List of all Mender artifacts",
                     mimeType="application/json",
                 ),
+                Resource(
+                    uri=AnyUrl("mender://releases"),
+                    name="Releases",
+                    description="List of all Mender releases",
+                    mimeType="application/json",
+                ),
             ]
 
         @self.server.read_resource()
@@ -68,6 +74,10 @@ class MenderMCPServer:
                     artifacts = self.mender_client.get_artifacts()
                     return self._format_artifacts_output(artifacts)
 
+                elif uri_str == "mender://releases":
+                    releases = self.mender_client.get_releases()
+                    return self._format_releases_output(releases)
+
                 elif uri_str.startswith("mender://devices/"):
                     device_id = uri_str.split("/")[-1]
                     device = self.mender_client.get_device(device_id)
@@ -77,6 +87,11 @@ class MenderMCPServer:
                     deployment_id = uri_str.split("/")[-1]
                     deployment = self.mender_client.get_deployment(deployment_id)
                     return self._format_deployment_output(deployment)
+
+                elif uri_str.startswith("mender://releases/"):
+                    release_name = uri_str.split("/")[-1]
+                    release = self.mender_client.get_release(release_name)
+                    return self._format_release_output(release)
 
                 else:
                     raise ValueError(f"Unknown resource: {uri}")
@@ -163,6 +178,44 @@ class MenderMCPServer:
                             }
                         }
                     }
+                ),
+                Tool(
+                    name="list_releases",
+                    description="List releases with optional filtering",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string",
+                                "description": "Filter by release name"
+                            },
+                            "tag": {
+                                "type": "string",
+                                "description": "Filter by release tag"
+                            },
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of releases to return",
+                                "minimum": 1,
+                                "maximum": 100,
+                                "default": 20
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_release_status",
+                    description="Get the details of a specific release",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "release_name": {
+                                "type": "string",
+                                "description": "The name of the release to check"
+                            }
+                        },
+                        "required": ["release_name"]
+                    }
                 )
             ]
 
@@ -201,6 +254,23 @@ class MenderMCPServer:
                         limit=limit
                     )
                     result = self._format_deployments_output(deployments)
+
+                elif name == "list_releases":
+                    name_filter = arguments.get("name")
+                    tag = arguments.get("tag")
+                    limit = arguments.get("limit", 20)
+
+                    releases = self.mender_client.get_releases(
+                        name=name_filter,
+                        tag=tag,
+                        limit=limit
+                    )
+                    result = self._format_releases_output(releases)
+
+                elif name == "get_release_status":
+                    release_name = arguments["release_name"]
+                    release = self.mender_client.get_release(release_name)
+                    result = self._format_release_output(release)
 
                 else:
                     result = f"Unknown tool: {name}"
@@ -311,6 +381,76 @@ class MenderMCPServer:
                 output += f"  Compatible Types: {', '.join(artifact.device_types_compatible)}\n"
             if artifact.size:
                 output += f"  Size: {artifact.size} bytes\n"
+            output += "\n"
+
+        return output
+
+    def _format_release_output(self, release) -> str:
+        """Format release information for output."""
+        output = f"Release Name: {release.name}\n"
+        
+        if release.modified:
+            output += f"Last Modified: {release.modified}\n"
+
+        if release.artifacts_count:
+            output += f"Artifacts Count: {release.artifacts_count}\n"
+
+        if release.notes:
+            output += f"Notes: {release.notes}\n"
+
+        if release.tags:
+            output += "Tags:\n"
+            for tag in release.tags:
+                output += f"  - {tag.get('key', 'N/A')}: {tag.get('value', 'N/A')}\n"
+
+        if release.artifacts:
+            output += f"Artifacts ({len(release.artifacts)}):\n"
+            for artifact in release.artifacts:
+                output += f"  • {artifact.get('name', 'N/A')}\n"
+                if artifact.get('id'):
+                    output += f"    ID: {artifact.get('id')}\n"
+                if artifact.get('size'):
+                    size_mb = artifact.get('size') / (1024*1024)
+                    output += f"    Size: {size_mb:.1f} MB\n"
+                output += f"    Signed: {artifact.get('signed', False)}\n"
+                if artifact.get('device_types_compatible'):
+                    device_types = artifact.get('device_types_compatible', [])[:3]
+                    output += f"    Device Types: {', '.join(device_types)}"
+                    if len(artifact.get('device_types_compatible', [])) > 3:
+                        output += f" (+{len(artifact.get('device_types_compatible', [])) - 3} more)"
+                    output += "\n"
+                output += "\n"
+
+        return output
+
+    def _format_releases_output(self, releases) -> str:
+        """Format releases list for output."""
+        if not releases:
+            return "No releases found."
+
+        output = f"Found {len(releases)} release(s):\n\n"
+
+        for release in releases:
+            output += f"• {release.name}\n"
+            if release.modified:
+                output += f"  Last Modified: {release.modified}\n"
+            if release.artifacts_count:
+                output += f"  Artifacts: {release.artifacts_count}\n"
+            if release.notes:
+                output += f"  Notes: {release.notes}\n"
+            if release.tags:
+                tags = [f"{t.get('key', 'N/A')}:{t.get('value', 'N/A')}" for t in release.tags[:2]]
+                output += f"  Tags: {', '.join(tags)}"
+                if len(release.tags) > 2:
+                    output += f" (+{len(release.tags) - 2} more)"
+                output += "\n"
+            # Show first artifact info if available
+            if release.artifacts and len(release.artifacts) > 0:
+                artifact = release.artifacts[0]
+                if artifact.get('size'):
+                    size_mb = artifact.get('size') / (1024*1024)
+                    output += f"  Size: {size_mb:.1f} MB\n"
+                output += f"  Signed: {artifact.get('signed', False)}\n"
             output += "\n"
 
         return output
