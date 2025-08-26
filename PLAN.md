@@ -412,3 +412,30 @@ mcp-server-mender \
 ---
 
 **Current Status**: ✅ Iteration 1 Complete - Ready for Iteration 2 planning and implementation
+
+---
+
+## Bug Fix: Device Types Display Truncation (TASK-20250826-1350-001)
+
+### Issue
+The `_format_release_output()` method artificially truncates device types compatible list to show only first 3 items with "+X more" indicator, preventing users from seeing complete device compatibility information.
+
+### Technical Details
+- **Location**: `/src/mcp_server_mender/server.py:417-421`
+- **Root Cause**: Intentional truncation with `device_types_compatible[:]3]` for "readability"
+- **Impact**: Users cannot make informed deployment decisions without full compatibility info
+
+### Fix Implementation
+- **Approach**: Multi-line bullet point format for all device types
+- **Line Length**: 64 characters max with smart wrapping
+- **Scope**: Device types only (tags truncation addressed separately)
+
+### Acceptance Criteria
+- [ ] Display all device types without truncation
+- [ ] Use bullet point format for readability with many types
+- [ ] Maintain 64 character line length limit
+- [ ] Preserve existing functionality for other fields
+- [ ] Update tests to validate complete device type display
+- [ ] Update documentation if needed
+
+### Status: 🚧 In Progress

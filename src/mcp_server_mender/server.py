@@ -414,13 +414,36 @@ class MenderMCPServer:
                     output += f"    Size: {size_mb:.1f} MB\n"
                 output += f"    Signed: {artifact.get('signed', False)}\n"
                 if artifact.get('device_types_compatible'):
-                    device_types = artifact.get('device_types_compatible', [])[:3]
-                    output += f"    Device Types: {', '.join(device_types)}"
-                    if len(artifact.get('device_types_compatible', [])) > 3:
-                        output += f" (+{len(artifact.get('device_types_compatible', [])) - 3} more)"
-                    output += "\n"
+                    device_types = artifact.get('device_types_compatible', [])
+                    output += self._format_device_types(device_types)
                 output += "\n"
 
+        return output
+
+    def _format_device_types(self, device_types) -> str:
+        """Format device types list with bullet points and 64-char line wrapping."""
+        if not device_types:
+            return ""
+        
+        if len(device_types) <= 3:
+            # For 3 or fewer types, use inline format
+            return f"    Device Types: {', '.join(device_types)}\n"
+        
+        # For more than 3 types, use bullet point format
+        output = f"    Device Types ({len(device_types)}):\n"
+        
+        for device_type in device_types:
+            # Format each device type as a bullet point
+            prefix = "      • "  # 8 characters
+            max_device_type_length = 64 - len(prefix) - 3  # 3 for "..."
+            
+            if len(prefix + device_type) <= 64:
+                output += f"{prefix}{device_type}\n"
+            else:
+                # Wrap long device type names - truncate to fit within 64 chars
+                truncated = device_type[:max_device_type_length]
+                output += f"{prefix}{truncated}...\n"
+        
         return output
 
     def _format_releases_output(self, releases) -> str:
