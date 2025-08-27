@@ -1,6 +1,6 @@
 """Tests for Mender MCP Server."""
 
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 import pytest
 
@@ -13,6 +13,7 @@ from mcp_server_mender.mender_api import (
     MenderDeploymentLog
 )
 from mcp_server_mender.server import MenderMCPServer
+from mcp_server_mender.security import SecurityLogger
 
 
 def test_mender_api_client_init():
@@ -867,4 +868,137 @@ def test_make_logs_request_handles_json_fallback():
     assert isinstance(result, dict)
     assert "entries" in result
     assert result["entries"][0]["message"] == "test log"
+
+
+# Security Integration Tests
+
+def test_mender_api_client_token_masking():
+    """Test that tokens are masked in MenderAPIClient logs."""
+    # Test the actual token masking functionality without mocking
+    from mcp_server_mender.security import SecurityLogger
+    
+    test_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test_payload_here"
+    masked = SecurityLogger.mask_token(test_token)
+    
+    # Verify the token is properly masked
+    assert "eyJhbGci" in masked      # First 8 chars should be visible
+    assert "here" in masked          # Last 8 chars should be visible  
+    assert "*" in masked             # Should contain masking asterisks
+    assert len(masked) == len(test_token)  # Should be same length
+    
+    # Verify original token is not fully exposed
+    assert masked != test_token      # Should be different from original
+        
+
+def test_mcp_server_security_logging():
+    """Test that MCP server initializes security logging."""
+    with patch('mcp_server_mender.server.SecurityLogger') as mock_security_logger:
+        with patch('mcp_server_mender.mender_api.MenderAPIClient'):
+            mock_logger_instance = Mock()
+            mock_security_logger.return_value = mock_logger_instance
+            
+            server = MenderMCPServer("https://hosted.mender.io", "test_token")
+            
+            # Verify SecurityLogger was instantiated for server
+            mock_security_logger.assert_called_with("mender_mcp_server")
+            # Verify initialization was logged
+            mock_logger_instance.log_secure.assert_called()
+
+
+def test_api_error_sanitization():
+    """Test that API errors are sanitized in ErrorSanitizer."""
+    from mcp_server_mender.security import ErrorSanitizer
+    
+    # Test error sanitization directly
+    error_response = "Authentication failed. Token eyJhbGciOiJIUzI1NiI invalid for user secret_user_id"
+    sanitized = ErrorSanitizer.sanitize_http_error(401, error_response, "/api/test")
+    
+    # Verify error message is sanitized and helpful
+    assert "Authentication failed" in sanitized  # Should contain helpful message
+    assert "Personal Access Token" in sanitized  # Should provide guidance
+    assert "eyJhbGci" not in sanitized           # Token should not be exposed
+    
+    # Test different error codes
+    sanitized_404 = ErrorSanitizer.sanitize_http_error(404, "Not found", "/api/devices/123")
+    assert "device ID may not exist" in sanitized_404
+    
+    sanitized_429 = ErrorSanitizer.sanitize_http_error(429, "Rate limited", "")
+    assert "rate limit exceeded" in sanitized_429.lower()
+
+
+def test_server_tool_input_validation():
+    """Test that server tool calls validate input parameters."""
+    # Test the input validation directly using the validation functions
+    from mcp_server_mender.security import validate_input, DeviceIdInput, DeploymentIdInput
+    
+    # Test valid device ID input
+    valid_data = {"device_id": "valid-device-123"}
+    result = validate_input(DeviceIdInput, valid_data)
+    assert result["device_id"] == "valid-device-123"
+    
+    # Test invalid input with path traversal (should fail at pattern level)
+    with pytest.raises(ValueError, match="Input validation failed"):
+        invalid_data = {"device_id": "../../../etc/passwd"}
+        validate_input(DeviceIdInput, invalid_data)
+        
+    # Test invalid input with special characters
+    with pytest.raises(ValueError, match="Input validation failed"):
+        invalid_data = {"device_id": "device<script>alert(1)</script>"}
+        validate_input(DeviceIdInput, invalid_data)
+    
+    # Test valid deployment ID
+    valid_deployment = {"deployment_id": "deployment-456-abc"}
+    result = validate_input(DeploymentIdInput, valid_deployment)
+    assert result["deployment_id"] == "deployment-456-abc"
+    
+    # Test injection prevention
+    with pytest.raises(ValueError, match="Input validation failed"):
+        invalid_deployment = {"deployment_id": "deploy'; DROP TABLE devices;--"}
+        validate_input(DeploymentIdInput, invalid_deployment)
+
+
+def test_security_logger_message_sanitization():
+    """Test that SecurityLogger properly sanitizes messages."""
+    # Test JWT token sanitization
+    message_with_jwt = "Request failed: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload"
+    sanitized = SecurityLogger.sanitize_message(message_with_jwt)
+    assert "eyJhbGci" not in sanitized
+    assert "[JWT_TOKEN]" in sanitized
+    
+    # Test API key sanitization
+    message_with_api_key = "API call with key: abcd1234567890abcd1234567890abcd"
+    sanitized = SecurityLogger.sanitize_message(message_with_api_key)
+    assert "abcd1234567890abcd1234567890abcd" not in sanitized
+    assert "[API_KEY]" in sanitized or "[REDACTED]" in sanitized
+    
+    # Test password sanitization
+    message_with_password = "Login failed: password=supersecret123"
+    sanitized = SecurityLogger.sanitize_message(message_with_password)
+    assert "supersecret123" not in sanitized
+    assert "password=[REDACTED]" in sanitized
+
+
+def test_token_masking_various_lengths():
+    """Test token masking for various token lengths."""
+    # Short token
+    short_token = "abc"
+    masked = SecurityLogger.mask_token(short_token)
+    assert masked == "***"
+    
+    # Medium token (16 chars exactly - boundary case, returned as-is)
+    medium_token = "abcdefghij123456"  # 16 chars - boundary case  
+    masked = SecurityLogger.mask_token(medium_token)
+    assert masked == medium_token  # 16 chars exactly - no masking applied
+    
+    # Long token (JWT-style)
+    long_token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    masked = SecurityLogger.mask_token(long_token)
+    assert masked.startswith("eyJhbGci")  # First 8 chars
+    assert masked.endswith("dQssw5c")    # Last 8 chars
+    assert "*" in masked                  # Has masking
+    assert len(masked) == len(long_token) # Same length
+    
+    # Empty token
+    empty_masked = SecurityLogger.mask_token("")
+    assert empty_masked == "*[EMPTY]*"
 

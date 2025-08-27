@@ -1,12 +1,15 @@
 """Mender API client with Personal Access Token authentication."""
 
 import json
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 import httpx
 from pydantic import BaseModel
+
+from .security import SecurityLogger, ErrorSanitizer
 
 
 class MenderDevice(BaseModel):
@@ -145,6 +148,16 @@ class MenderAPIClient:
         self.server_url = server_url.rstrip("/")
         self.access_token = access_token
         self.timeout = timeout
+        
+        # Initialize security logger
+        self.security_logger = SecurityLogger("mender_api_client")
+        
+        # Log initialization with masked token
+        masked_token = SecurityLogger.mask_token(access_token)
+        self.security_logger.log_secure(
+            logging.INFO, 
+            f"Initializing Mender API client for {server_url} with token {masked_token}"
+        )
 
         # Initialize HTTP client with authentication headers
         self.client = httpx.Client(
@@ -183,12 +196,39 @@ class MenderAPIClient:
             return response.json()
 
         except httpx.HTTPStatusError as e:
-            error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
-            raise MenderAPIError(error_msg, e.response.status_code)
+            # Sanitize error response to prevent information leakage
+            safe_error_msg = ErrorSanitizer.sanitize_http_error(
+                e.response.status_code, 
+                e.response.text, 
+                url
+            )
+            
+            # Log full error internally for debugging (with sanitization)
+            self.security_logger.log_secure(
+                logging.ERROR,
+                f"HTTP {e.response.status_code} error for {method} {endpoint}: {e.response.text[:200]}"
+            )
+            
+            # Raise sanitized error for user
+            raise MenderAPIError(safe_error_msg, e.response.status_code)
+            
         except httpx.RequestError as e:
-            raise MenderAPIError(f"Request failed: {str(e)}")
+            error_msg = f"Request failed: Network error occurred while connecting to Mender API"
+            # Log detailed error internally
+            self.security_logger.log_secure(
+                logging.ERROR,
+                f"Request error for {method} {endpoint}: {str(e)}"
+            )
+            raise MenderAPIError(error_msg)
+            
         except json.JSONDecodeError as e:
-            raise MenderAPIError(f"Invalid JSON response: {str(e)}")
+            error_msg = "Invalid response format received from Mender API"
+            # Log detailed error internally
+            self.security_logger.log_secure(
+                logging.ERROR,
+                f"JSON decode error for {method} {endpoint}: {str(e)}"
+            )
+            raise MenderAPIError(error_msg)
 
     def _make_logs_request(self, method: str, endpoint: str, **kwargs) -> Any:
         """Make HTTP request for deployment logs that can handle various response formats.
@@ -243,10 +283,30 @@ class MenderAPIClient:
                 return f"Binary content ({len(response.content)} bytes): {response.content[:100]!r}..."
 
         except httpx.HTTPStatusError as e:
-            error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
-            raise MenderAPIError(error_msg, e.response.status_code)
+            # Sanitize error response to prevent information leakage
+            safe_error_msg = ErrorSanitizer.sanitize_http_error(
+                e.response.status_code,
+                e.response.text,
+                url
+            )
+            
+            # Log full error internally for debugging (with sanitization)
+            self.security_logger.log_secure(
+                logging.ERROR,
+                f"HTTP {e.response.status_code} error for logs request {method} {endpoint}: {e.response.text[:200]}"
+            )
+            
+            # Raise sanitized error for user
+            raise MenderAPIError(safe_error_msg, e.response.status_code)
+            
         except httpx.RequestError as e:
-            raise MenderAPIError(f"Request failed: {str(e)}")
+            error_msg = f"Request failed: Network error occurred while connecting to Mender API"
+            # Log detailed error internally
+            self.security_logger.log_secure(
+                logging.ERROR,
+                f"Request error for logs {method} {endpoint}: {str(e)}"
+            )
+            raise MenderAPIError(error_msg)
 
     def get_devices(self,
                    status: Optional[str] = None,
@@ -800,4 +860,10 @@ class MenderAPIClient:
 
     def close(self) -> None:
         """Close the HTTP client."""
+        # Log connection closure with masked token
+        masked_token = SecurityLogger.mask_token(self.access_token)
+        self.security_logger.log_secure(
+            logging.INFO,
+            f"Closing Mender API client connection for {self.server_url} (token: {masked_token})"
+        )
         self.client.close()

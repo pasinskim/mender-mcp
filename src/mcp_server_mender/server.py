@@ -12,6 +12,11 @@ from mcp.types import Resource, TextContent, Tool
 from pydantic import AnyUrl
 
 from .mender_api import MenderAPIClient, MenderAPIError
+from .security import (
+    SecurityLogger, ErrorSanitizer, validate_input,
+    DeviceIdInput, DeploymentIdInput, ReleaseNameInput,
+    LimitInput, StatusInput, DeviceTypeInput
+)
 
 
 class MenderMCPServer:
@@ -21,6 +26,16 @@ class MenderMCPServer:
         """Initialize the server with Mender API client."""
         self.mender_client = MenderAPIClient(server_url, access_token)
         self.server = Server("mender")
+        
+        # Initialize security logger for server operations
+        self.security_logger = SecurityLogger("mender_mcp_server")
+        
+        # Log server initialization (token will be masked by MenderAPIClient)
+        self.security_logger.log_secure(
+            20,  # INFO level
+            f"Initializing Mender MCP Server for {server_url}"
+        )
+        
         self._setup_handlers()
 
     def _setup_handlers(self) -> None:
@@ -320,17 +335,31 @@ class MenderMCPServer:
 
         @self.server.call_tool()
         async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
-            """Handle tool calls."""
+            """Handle tool calls with comprehensive input validation."""
             try:
+                # Log tool call with sanitized arguments
+                safe_args = {k: v for k, v in arguments.items() if not k.lower().endswith('token')}
+                self.security_logger.log_secure(
+                    20,  # INFO level
+                    f"Tool call: {name} with arguments: {safe_args}"
+                )
+                
                 if name == "get_device_status":
-                    device_id = arguments["device_id"]
+                    # Validate input parameters
+                    validated = validate_input(DeviceIdInput, arguments)
+                    device_id = validated["device_id"]
                     device = self.mender_client.get_device(device_id)
                     result = self._format_device_output(device)
 
                 elif name == "list_devices":
-                    status = arguments.get("status")
-                    device_type = arguments.get("device_type")
-                    limit = arguments.get("limit", 20)
+                    # Validate input parameters
+                    validated_status = validate_input(StatusInput, {"status": arguments.get("status")}) if arguments.get("status") else {}
+                    validated_device_type = validate_input(DeviceTypeInput, {"device_type": arguments.get("device_type")}) if arguments.get("device_type") else {}
+                    validated_limit = validate_input(LimitInput, {"limit": arguments.get("limit", 20)})
+                    
+                    status = validated_status.get("status")
+                    device_type = validated_device_type.get("device_type")
+                    limit = validated_limit.get("limit", 20)
 
                     devices = self.mender_client.get_devices(
                         status=status,
@@ -340,13 +369,19 @@ class MenderMCPServer:
                     result = self._format_devices_output(devices)
 
                 elif name == "get_deployment_status":
-                    deployment_id = arguments["deployment_id"]
+                    # Validate input parameters
+                    validated = validate_input(DeploymentIdInput, arguments)
+                    deployment_id = validated["deployment_id"]
                     deployment = self.mender_client.get_deployment(deployment_id)
                     result = self._format_deployment_output(deployment)
 
                 elif name == "list_deployments":
-                    status = arguments.get("status")
-                    limit = arguments.get("limit", 10)
+                    # Validate input parameters
+                    validated_status = validate_input(StatusInput, {"status": arguments.get("status")}) if arguments.get("status") else {}
+                    validated_limit = validate_input(LimitInput, {"limit": arguments.get("limit", 10)})
+                    
+                    status = validated_status.get("status")
+                    limit = validated_limit.get("limit", 10)
 
                     deployments = self.mender_client.get_deployments(
                         status=status,
@@ -355,9 +390,19 @@ class MenderMCPServer:
                     result = self._format_deployments_output(deployments)
 
                 elif name == "list_releases":
+                    # Validate input parameters
+                    validated_limit = validate_input(LimitInput, {"limit": arguments.get("limit", 20)})
+                    limit = validated_limit.get("limit", 20)
+                    
+                    # Note: name and tag are optional filters, validation is less strict
                     name_filter = arguments.get("name")
                     tag = arguments.get("tag")
-                    limit = arguments.get("limit", 20)
+                    
+                    # Basic sanitization for name and tag filters
+                    if name_filter and ('..' in name_filter or '/' in name_filter):
+                        raise ValueError("Invalid name filter format")
+                    if tag and ('..' in tag or '/' in tag):
+                        raise ValueError("Invalid tag filter format")
 
                     releases = self.mender_client.get_releases(
                         name=name_filter,
@@ -367,18 +412,28 @@ class MenderMCPServer:
                     result = self._format_releases_output(releases)
 
                 elif name == "get_release_status":
-                    release_name = arguments["release_name"]
+                    # Validate input parameters
+                    validated = validate_input(ReleaseNameInput, arguments)
+                    release_name = validated["release_name"]
                     release = self.mender_client.get_release(release_name)
                     result = self._format_release_output(release)
 
                 elif name == "get_device_inventory":
-                    device_id = arguments["device_id"]
+                    # Validate input parameters
+                    validated = validate_input(DeviceIdInput, arguments)
+                    device_id = validated["device_id"]
                     inventory = self.mender_client.get_device_inventory(device_id)
                     result = self._format_device_inventory_output(inventory)
 
                 elif name == "list_device_inventory":
-                    limit = arguments.get("limit", 20)
+                    # Validate input parameters
+                    validated_limit = validate_input(LimitInput, {"limit": arguments.get("limit", 20)})
+                    limit = validated_limit.get("limit", 20)
+                    
+                    # has_attribute is optional, basic sanitization
                     has_attribute = arguments.get("has_attribute")
+                    if has_attribute and ('..' in has_attribute or '/' in has_attribute):
+                        raise ValueError("Invalid has_attribute filter format")
                     
                     inventories = self.mender_client.get_devices_inventory(
                         limit=limit,
@@ -387,17 +442,24 @@ class MenderMCPServer:
                     result = self._format_inventories_output(inventories)
 
                 elif name == "get_inventory_groups":
+                    # No input parameters to validate
                     groups = self.mender_client.get_inventory_groups()
                     result = self._format_inventory_groups_output(groups)
 
                 elif name == "get_deployment_device_log":
-                    deployment_id = arguments["deployment_id"]
-                    device_id = arguments["device_id"]
+                    # Validate input parameters
+                    deployment_validated = validate_input(DeploymentIdInput, {"deployment_id": arguments["deployment_id"]})
+                    device_validated = validate_input(DeviceIdInput, {"device_id": arguments["device_id"]})
+                    
+                    deployment_id = deployment_validated["deployment_id"]
+                    device_id = device_validated["device_id"]
                     log = self.mender_client.get_deployment_device_log(deployment_id, device_id)
                     result = self._format_deployment_log_output(log)
 
                 elif name == "get_deployment_logs":
-                    deployment_id = arguments["deployment_id"]
+                    # Validate input parameters
+                    validated = validate_input(DeploymentIdInput, arguments)
+                    deployment_id = validated["deployment_id"]
                     logs = self.mender_client.get_deployment_logs(deployment_id)
                     result = self._format_deployment_logs_output(logs)
 
@@ -406,13 +468,32 @@ class MenderMCPServer:
 
                 return [TextContent(type="text", text=result)]
 
+            except ValueError as e:
+                # Input validation errors
+                error_msg = f"Input validation error: {str(e)}"
+                self.security_logger.log_secure(
+                    40,  # ERROR level
+                    f"Input validation failed for tool {name}: {str(e)}"
+                )
+                return [TextContent(type="text", text=error_msg)]
+                
             except MenderAPIError as e:
+                # Mender API errors (already sanitized by ErrorSanitizer)
                 error_msg = f"Mender API Error: {e.message}"
                 if e.status_code:
                     error_msg += f" (HTTP {e.status_code})"
                 return [TextContent(type="text", text=error_msg)]
+                
             except Exception as e:
-                return [TextContent(type="text", text=f"Unexpected error: {str(e)}")]
+                # Unexpected errors - sanitize before exposing
+                sanitized_error = SecurityLogger.sanitize_message(str(e))
+                error_msg = f"Unexpected error: {sanitized_error}"
+                
+                self.security_logger.log_secure(
+                    50,  # CRITICAL level  
+                    f"Unexpected error in tool {name}: {str(e)}"
+                )
+                return [TextContent(type="text", text=error_msg)]
 
     def _format_device_output(self, device) -> str:
         """Format device information for output."""
