@@ -54,6 +54,18 @@ class MenderMCPServer:
                     description="List of all Mender releases",
                     mimeType="application/json",
                 ),
+                Resource(
+                    uri=AnyUrl("mender://inventory"),
+                    name="Device Inventory",
+                    description="Complete device inventory with all attributes",
+                    mimeType="application/json",
+                ),
+                Resource(
+                    uri=AnyUrl("mender://inventory-groups"),
+                    name="Inventory Groups",
+                    description="Device grouping information",
+                    mimeType="application/json",
+                ),
             ]
 
         @self.server.read_resource()
@@ -92,6 +104,19 @@ class MenderMCPServer:
                     release_name = uri_str.split("/")[-1]
                     release = self.mender_client.get_release(release_name)
                     return self._format_release_output(release)
+
+                elif uri_str == "mender://inventory":
+                    inventories = self.mender_client.get_devices_inventory()
+                    return self._format_inventories_output(inventories)
+
+                elif uri_str.startswith("mender://inventory/"):
+                    device_id = uri_str.split("/")[-1]
+                    inventory = self.mender_client.get_device_inventory(device_id)
+                    return self._format_device_inventory_output(inventory)
+
+                elif uri_str == "mender://inventory-groups":
+                    groups = self.mender_client.get_inventory_groups()
+                    return self._format_inventory_groups_output(groups)
 
                 else:
                     raise ValueError(f"Unknown resource: {uri}")
@@ -216,6 +241,80 @@ class MenderMCPServer:
                         },
                         "required": ["release_name"]
                     }
+                ),
+                Tool(
+                    name="get_device_inventory",
+                    description="Get complete inventory attributes for a specific device",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "device_id": {
+                                "type": "string",
+                                "description": "The ID of the device to get inventory for"
+                            }
+                        },
+                        "required": ["device_id"]
+                    }
+                ),
+                Tool(
+                    name="list_device_inventory",
+                    description="List device inventories with optional filtering",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of device inventories to return",
+                                "minimum": 1,
+                                "maximum": 500,
+                                "default": 20
+                            },
+                            "has_attribute": {
+                                "type": "string",
+                                "description": "Filter devices that have a specific attribute name"
+                            }
+                        }
+                    }
+                ),
+                Tool(
+                    name="get_inventory_groups",
+                    description="Get all device inventory groups",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {}
+                    }
+                ),
+                Tool(
+                    name="get_deployment_device_log",
+                    description="Get deployment logs for a specific device in a deployment",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "deployment_id": {
+                                "type": "string",
+                                "description": "The deployment ID"
+                            },
+                            "device_id": {
+                                "type": "string",
+                                "description": "The device ID"
+                            }
+                        },
+                        "required": ["deployment_id", "device_id"]
+                    }
+                ),
+                Tool(
+                    name="get_deployment_logs",
+                    description="Get deployment logs for all devices in a deployment",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "deployment_id": {
+                                "type": "string",
+                                "description": "The deployment ID"
+                            }
+                        },
+                        "required": ["deployment_id"]
+                    }
                 )
             ]
 
@@ -271,6 +370,36 @@ class MenderMCPServer:
                     release_name = arguments["release_name"]
                     release = self.mender_client.get_release(release_name)
                     result = self._format_release_output(release)
+
+                elif name == "get_device_inventory":
+                    device_id = arguments["device_id"]
+                    inventory = self.mender_client.get_device_inventory(device_id)
+                    result = self._format_device_inventory_output(inventory)
+
+                elif name == "list_device_inventory":
+                    limit = arguments.get("limit", 20)
+                    has_attribute = arguments.get("has_attribute")
+                    
+                    inventories = self.mender_client.get_devices_inventory(
+                        limit=limit,
+                        has_attribute=has_attribute
+                    )
+                    result = self._format_inventories_output(inventories)
+
+                elif name == "get_inventory_groups":
+                    groups = self.mender_client.get_inventory_groups()
+                    result = self._format_inventory_groups_output(groups)
+
+                elif name == "get_deployment_device_log":
+                    deployment_id = arguments["deployment_id"]
+                    device_id = arguments["device_id"]
+                    log = self.mender_client.get_deployment_device_log(deployment_id, device_id)
+                    result = self._format_deployment_log_output(log)
+
+                elif name == "get_deployment_logs":
+                    deployment_id = arguments["deployment_id"]
+                    logs = self.mender_client.get_deployment_logs(deployment_id)
+                    result = self._format_deployment_logs_output(logs)
 
                 else:
                     result = f"Unknown tool: {name}"
@@ -505,6 +634,194 @@ class MenderMCPServer:
                 output += f"  Signed: {artifact.get('signed', False)}\n"
             output += "\n"
 
+        return output
+
+    def _format_device_inventory_output(self, inventory) -> str:
+        """Format complete device inventory for display."""
+        output = f"Device ID: {inventory.device_id}\n"
+        
+        if inventory.updated_ts:
+            output += f"Last Updated: {inventory.updated_ts}\n"
+        
+        # Get group information if available
+        try:
+            group = self.mender_client.get_device_group(inventory.device_id)
+            if group:
+                output += f"Group: {group}\n"
+        except Exception:
+            # Ignore group errors to avoid breaking inventory display
+            pass
+        
+        if not inventory.attributes:
+            output += "No inventory attributes found.\n"
+            return output
+        
+        output += f"\nInventory Attributes ({len(inventory.attributes)}):\n"
+        
+        for attr in inventory.attributes:
+            attr_name = attr.name
+            attr_value = str(attr.value)
+            
+            # Truncate long values for readability
+            if len(attr_value) > 60:
+                attr_value = attr_value[:57] + "..."
+            
+            output += f"  • {attr_name}: {attr_value}\n"
+        
+        return output
+
+    def _format_inventories_output(self, inventories) -> str:
+        """Format device inventories list for display."""
+        if not inventories:
+            return "No device inventories found."
+
+        output = f"Found {len(inventories)} device inventories:\n\n"
+
+        for inventory in inventories:
+            output += f"• {inventory.device_id}\n"
+            if inventory.updated_ts:
+                output += f"  Last Updated: {inventory.updated_ts}\n"
+            
+            attr_count = len(inventory.attributes)
+            if attr_count > 0:
+                output += f"  Attributes: {attr_count}\n"
+                
+                # Show first few attributes as preview
+                preview_attrs = inventory.attributes[:3]
+                for attr in preview_attrs:
+                    attr_value = str(attr.value)
+                    if len(attr_value) > 30:
+                        attr_value = attr_value[:27] + "..."
+                    output += f"    - {attr.name}: {attr_value}\n"
+                
+                if attr_count > 3:
+                    output += f"    ... and {attr_count - 3} more\n"
+            else:
+                output += "  No attributes\n"
+            
+            output += "\n"
+
+        return output
+
+    def _format_inventory_groups_output(self, groups) -> str:
+        """Format inventory groups information."""
+        if not groups:
+            return "No inventory groups found."
+
+        output = f"Found {len(groups)} inventory groups:\n\n"
+
+        for group in groups:
+            group_name = group.get("group", "Unknown")
+            device_count = group.get("device_count", 0)
+            
+            output += f"• {group_name}\n"
+            if device_count > 0:
+                output += f"  Devices: {device_count}\n"
+            else:
+                output += "  No devices\n"
+            
+            # Show group attributes if available
+            if "attributes" in group and group["attributes"]:
+                attrs = group["attributes"]
+                output += f"  Group Attributes: {len(attrs)}\n"
+                for key, value in attrs.items():
+                    value_str = str(value)
+                    if len(value_str) > 40:
+                        value_str = value_str[:37] + "..."
+                    output += f"    - {key}: {value_str}\n"
+            
+            output += "\n"
+
+        return output
+
+    def _format_deployment_log_output(self, log) -> str:
+        """Format deployment log for specific device."""
+        from .mender_api import MenderDeploymentLog
+        
+        if not isinstance(log, MenderDeploymentLog):
+            return f"Invalid deployment log data: {str(log)}"
+        
+        output = f"Deployment Log\n"
+        output += f"================\n"
+        output += f"Deployment ID: {log.deployment_id}\n"
+        output += f"Device ID: {log.device_id}\n"
+        
+        if log.retrieved_at:
+            output += f"Retrieved: {log.retrieved_at}\n"
+        
+        output += f"Log Entries: {len(log.entries)}\n\n"
+        
+        if not log.entries:
+            output += "No log entries found.\n"
+            output += "Note: Deployment logs may only be available for failed deployments\n"
+            output += "or may not be enabled for this Mender configuration.\n"
+            return output
+        
+        output += "Log Details:\n"
+        output += "------------\n"
+        
+        for entry in log.entries:
+            # Format timestamp
+            timestamp_str = ""
+            if entry.timestamp:
+                timestamp_str = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Format level
+            level_str = ""
+            if entry.level:
+                level_str = f"[{entry.level}] "
+            
+            # Format message with truncation if too long
+            message = entry.message
+            if len(message) > 200:
+                message = message[:197] + "..."
+            
+            if timestamp_str:
+                output += f"{timestamp_str} {level_str}{message}\n"
+            else:
+                output += f"{level_str}{message}\n"
+        
+        return output
+
+    def _format_deployment_logs_output(self, logs) -> str:
+        """Format deployment logs for all devices."""
+        from .mender_api import MenderDeploymentLog
+        
+        if not logs:
+            return "No deployment logs found.\n" \
+                   "Note: Deployment logs may only be available for failed deployments\n" \
+                   "or may not be enabled for this Mender configuration."
+        
+        output = f"Deployment Logs Summary\n"
+        output += f"======================\n"
+        output += f"Found logs for {len(logs)} device(s):\n\n"
+        
+        for log in logs:
+            if not isinstance(log, MenderDeploymentLog):
+                continue
+                
+            output += f"• Device: {log.device_id}\n"
+            output += f"  Log Entries: {len(log.entries)}\n"
+            
+            if log.entries:
+                # Show first few log entries as preview
+                preview_entries = log.entries[:3]
+                for entry in preview_entries:
+                    level_str = f"[{entry.level}] " if entry.level else ""
+                    message = entry.message
+                    if len(message) > 80:
+                        message = message[:77] + "..."
+                    output += f"    {level_str}{message}\n"
+                
+                if len(log.entries) > 3:
+                    output += f"    ... and {len(log.entries) - 3} more entries\n"
+            else:
+                output += "    No log entries\n"
+            
+            output += "\n"
+        
+        output += "Use 'get_deployment_device_log' for complete logs of specific devices.\n"
+        
         return output
 
     async def run(self) -> None:

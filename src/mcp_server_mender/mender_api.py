@@ -33,7 +33,8 @@ class MenderDeployment(BaseModel):
     finished: Optional[datetime] = None
     device_count: Optional[int] = None
     max_devices: Optional[int] = None
-    statistics: Optional[Dict[str, int]] = None
+    # Device statistics, e.g., {"inprogress": 5, "finished": 10, ...}
+    statistics: Optional[Dict[str, Any]] = None
 
 
 class MenderArtifact(BaseModel):
@@ -62,29 +63,63 @@ class MenderRelease(BaseModel):
     tags: List[Dict[str, str]] = []
     notes: Optional[str] = None
 
+    # Factory methods to handle differences between v1 and v2 API responses
     @classmethod
-    def from_v1_data(cls, data: Dict[str, Any]) -> "MenderRelease":
-        """Create a MenderRelease from v1 API response data."""
+    def from_v1_data(cls, data: Dict[str, Any]) -> 'MenderRelease':
+        """Create MenderRelease from v1 API response data."""
         return cls(
-            name=data.get("Name", ""),
-            modified=data.get("Modified"),
-            artifacts=data.get("Artifacts", []),
-            artifacts_count=data.get("ArtifactsCount"),
-            tags=data.get("tags", []),
-            notes=data.get("notes", "")
+            name=data.get('name', ''),
+            modified=data.get('modified'),
+            artifacts=data.get('artifacts', []),
+            artifacts_count=len(data.get('artifacts', [])),
+            tags=data.get('tags', []),
+            notes=data.get('notes')
         )
     
     @classmethod
-    def from_v2_data(cls, data: Dict[str, Any]) -> "MenderRelease":
-        """Create a MenderRelease from v2 API response data."""
+    def from_v2_data(cls, data: Dict[str, Any]) -> 'MenderRelease':
+        """Create MenderRelease from v2 API response data."""
         return cls(
-            name=data.get("name", ""),
-            modified=data.get("modified"),
-            artifacts=data.get("artifacts", []),
-            artifacts_count=data.get("artifacts_count"),
-            tags=data.get("tags", []),
-            notes=data.get("notes", "")
+            name=data.get('name', ''),
+            modified=data.get('modified'),
+            artifacts=data.get('artifacts', []),
+            artifacts_count=data.get('artifacts_count', len(data.get('artifacts', []))),
+            tags=data.get('tags', []),
+            notes=data.get('notes')
         )
+
+
+class MenderInventoryItem(BaseModel):
+    """Individual inventory attribute item."""
+    
+    name: str
+    value: Any
+    description: Optional[str] = None
+
+
+class MenderDeviceInventory(BaseModel):
+    """Complete device inventory including attributes."""
+    
+    device_id: str
+    attributes: List[MenderInventoryItem] = []
+    updated_ts: Optional[datetime] = None
+
+
+class MenderDeploymentLogEntry(BaseModel):
+    """Individual deployment log entry."""
+    
+    timestamp: Optional[datetime] = None
+    level: Optional[str] = None  # INFO, ERROR, DEBUG, etc.
+    message: str
+
+
+class MenderDeploymentLog(BaseModel):
+    """Complete deployment log for a device."""
+    
+    deployment_id: str
+    device_id: str
+    entries: List[MenderDeploymentLogEntry] = []
+    retrieved_at: Optional[datetime] = None
 
 
 class MenderAPIError(Exception):
@@ -380,6 +415,330 @@ class MenderAPIClient:
                     )
             else:
                 raise
+
+    def get_device_inventory(self, device_id: str) -> MenderDeviceInventory:
+        """Get complete inventory for a specific device.
+        
+        Args:
+            device_id: Device ID
+            
+        Returns:
+            MenderDeviceInventory object
+        """
+        data = self._make_request(
+            "GET",
+            f"/api/management/v1/inventory/devices/{device_id}"
+        )
+        
+        # Convert API response to inventory items
+        attributes = []
+        if isinstance(data, dict):
+            # v1 API returns attributes as a nested list
+            if "attributes" in data and isinstance(data["attributes"], list):
+                for attr in data["attributes"]:
+                    if isinstance(attr, dict) and "name" in attr and "value" in attr:
+                        attributes.append(MenderInventoryItem(
+                            name=attr["name"], 
+                            value=attr["value"],
+                            description=attr.get("scope")  # Use scope as description
+                        ))
+            else:
+                # Fallback: treat all keys as attributes
+                for key, value in data.items():
+                    if key not in ["id", "updated_ts"]:
+                        attributes.append(MenderInventoryItem(name=key, value=value))
+        
+        return MenderDeviceInventory(
+            device_id=device_id,
+            attributes=attributes,
+            updated_ts=data.get("updated_ts")
+        )
+
+    def get_devices_inventory(self,
+                             limit: Optional[int] = None,
+                             has_attribute: Optional[str] = None) -> List[MenderDeviceInventory]:
+        """Get inventory for multiple devices.
+        
+        Args:
+            limit: Maximum number of device inventories to return
+            has_attribute: Filter devices that have a specific attribute name
+            
+        Returns:
+            List of MenderDeviceInventory objects
+        """
+        params = {}
+        if limit:
+            params["per_page"] = limit
+        if has_attribute:
+            params["has_attribute"] = has_attribute
+            
+        data = self._make_request(
+            "GET",
+            "/api/management/v1/inventory/devices",
+            params=params
+        )
+        
+        inventories = []
+        if isinstance(data, list):
+            for device_data in data:
+                device_id = device_data.get("id", "unknown")
+                attributes = []
+                
+                # v1 API returns attributes as a nested list
+                if "attributes" in device_data and isinstance(device_data["attributes"], list):
+                    for attr in device_data["attributes"]:
+                        if isinstance(attr, dict) and "name" in attr and "value" in attr:
+                            attributes.append(MenderInventoryItem(
+                                name=attr["name"], 
+                                value=attr["value"],
+                                description=attr.get("scope")  # Use scope as description
+                            ))
+                else:
+                    # Fallback: treat all keys as attributes
+                    for key, value in device_data.items():
+                        if key not in ["id", "updated_ts"]:
+                            attributes.append(MenderInventoryItem(name=key, value=value))
+                
+                inventories.append(MenderDeviceInventory(
+                    device_id=device_id,
+                    attributes=attributes,
+                    updated_ts=device_data.get("updated_ts")
+                ))
+        
+        return inventories
+
+    def get_inventory_groups(self) -> List[Dict[str, Any]]:
+        """Get all inventory groups.
+        
+        Returns:
+            List of inventory group objects
+        """
+        data = self._make_request(
+            "GET",
+            "/api/management/v1/inventory/groups"
+        )
+        
+        return data if isinstance(data, list) else []
+
+    def get_device_group(self, device_id: str) -> Optional[str]:
+        """Get group membership for a specific device.
+        
+        Args:
+            device_id: Device ID
+            
+        Returns:
+            Group name if device is in a group, None otherwise
+        """
+        try:
+            data = self._make_request(
+                "GET", 
+                f"/api/management/v1/inventory/devices/{device_id}/group"
+            )
+            return data.get("group") if isinstance(data, dict) else None
+        except MenderAPIError:
+            # Device may not be in any group
+            return None
+
+    def get_deployment_device_log(self, deployment_id: str, device_id: str) -> MenderDeploymentLog:
+        """Get deployment logs for specific device in deployment.
+        
+        Args:
+            deployment_id: Deployment ID
+            device_id: Device ID
+            
+        Returns:
+            MenderDeploymentLog object
+        """
+        # Try v2 endpoint first, fallback to v1 if not available
+        try:
+            data = self._make_request(
+                "GET",
+                f"/api/management/v2/deployments/deployments/{deployment_id}/devices/{device_id}/log"
+            )
+        except MenderAPIError as e:
+            if e.status_code == 404:
+                # Try v1 endpoint as fallback
+                data = self._make_request(
+                    "GET", 
+                    f"/api/management/v1/deployments/deployments/{deployment_id}/devices/{device_id}/log"
+                )
+            else:
+                raise
+        
+        return self._parse_deployment_log_response(data, deployment_id, device_id)
+
+    def get_deployment_logs(self, deployment_id: str) -> List[MenderDeploymentLog]:
+        """Get deployment logs for all devices in deployment.
+        
+        Args:
+            deployment_id: Deployment ID
+            
+        Returns:
+            List of MenderDeploymentLog objects
+        """
+        # First get deployment details to find devices
+        deployment = self.get_deployment(deployment_id)
+        
+        # Get devices that were part of this deployment
+        # Try to get deployment devices endpoint, fallback to general approach
+        try:
+            # Try v2 endpoint first
+            devices_data = self._make_request(
+                "GET",
+                f"/api/management/v2/deployments/deployments/{deployment_id}/devices"
+            )
+        except MenderAPIError as e:
+            if e.status_code == 404:
+                # Try v1 endpoint as fallback
+                try:
+                    devices_data = self._make_request(
+                        "GET",
+                        f"/api/management/v1/deployments/deployments/{deployment_id}/devices"
+                    )
+                except MenderAPIError:
+                    # If we can't get deployment devices, return empty list
+                    return []
+            else:
+                raise
+        
+        logs = []
+        
+        # Extract device IDs from deployment devices response
+        device_ids = []
+        if isinstance(devices_data, list):
+            device_ids = [device.get("id") for device in devices_data if device.get("id")]
+        elif isinstance(devices_data, dict) and "devices" in devices_data:
+            device_ids = [device.get("id") for device in devices_data["devices"] if device.get("id")]
+        
+        # Get logs for each device
+        for device_id in device_ids:
+            try:
+                log = self.get_deployment_device_log(deployment_id, device_id)
+                logs.append(log)
+            except MenderAPIError:
+                # Continue if we can't get logs for one device
+                continue
+                
+        return logs
+
+    def _parse_deployment_log_response(self, data: Any, deployment_id: str, device_id: str) -> MenderDeploymentLog:
+        """Parse deployment log response into MenderDeploymentLog object.
+        
+        Args:
+            data: Raw response data from API
+            deployment_id: Deployment ID
+            device_id: Device ID
+            
+        Returns:
+            MenderDeploymentLog object
+        """
+        entries = []
+        
+        if isinstance(data, str):
+            # Plain text response - split into lines and create entries
+            lines = data.strip().split('\n')
+            for line in lines:
+                if line.strip():
+                    # Try to parse common log formats
+                    entry = self._parse_log_line(line)
+                    entries.append(entry)
+        
+        elif isinstance(data, list):
+            # JSON array of log entries
+            for entry_data in data:
+                if isinstance(entry_data, dict):
+                    entries.append(MenderDeploymentLogEntry(
+                        timestamp=entry_data.get("timestamp"),
+                        level=entry_data.get("level"),
+                        message=entry_data.get("message", str(entry_data))
+                    ))
+                else:
+                    entries.append(MenderDeploymentLogEntry(
+                        message=str(entry_data)
+                    ))
+        
+        elif isinstance(data, dict):
+            # JSON object response
+            if "entries" in data:
+                # Structured log with entries
+                for entry_data in data["entries"]:
+                    entries.append(MenderDeploymentLogEntry(
+                        timestamp=entry_data.get("timestamp"),
+                        level=entry_data.get("level"),
+                        message=entry_data.get("message", str(entry_data))
+                    ))
+            elif "messages" in data:
+                # Alternative structure
+                for message in data["messages"]:
+                    entries.append(MenderDeploymentLogEntry(
+                        message=str(message)
+                    ))
+            else:
+                # Treat entire response as single log entry
+                entries.append(MenderDeploymentLogEntry(
+                    message=str(data)
+                ))
+        
+        else:
+            # Unknown format, treat as string
+            entries.append(MenderDeploymentLogEntry(
+                message=str(data)
+            ))
+        
+        return MenderDeploymentLog(
+            deployment_id=deployment_id,
+            device_id=device_id,
+            entries=entries,
+            retrieved_at=datetime.now()
+        )
+
+    def _parse_log_line(self, line: str) -> MenderDeploymentLogEntry:
+        """Parse individual log line into MenderDeploymentLogEntry.
+        
+        Args:
+            line: Raw log line
+            
+        Returns:
+            MenderDeploymentLogEntry object
+        """
+        # Try to extract timestamp and level from common log formats
+        # Format 1: "2023-08-27T12:30:45Z INFO: message"
+        # Format 2: "INFO: message"
+        # Format 3: "message"
+        
+        import re
+        
+        # Try to match timestamp and level pattern
+        timestamp_pattern = r'(\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)'
+        level_pattern = r'\b(DEBUG|INFO|WARN|WARNING|ERROR|FATAL|TRACE)\b'
+        
+        timestamp = None
+        level = None
+        message = line.strip()
+        
+        # Extract timestamp
+        timestamp_match = re.search(timestamp_pattern, line)
+        if timestamp_match:
+            try:
+                from dateutil.parser import parse
+                timestamp = parse(timestamp_match.group(1))
+                # Remove timestamp from message
+                message = line.replace(timestamp_match.group(1), '').strip()
+            except:
+                pass
+        
+        # Extract level
+        level_match = re.search(level_pattern, line, re.IGNORECASE)
+        if level_match:
+            level = level_match.group(1).upper()
+            # Remove level indicator from message
+            message = re.sub(rf'\b{re.escape(level_match.group(1))}\b\s*:?\s*', '', message, flags=re.IGNORECASE).strip()
+        
+        return MenderDeploymentLogEntry(
+            timestamp=timestamp,
+            level=level,
+            message=message or line.strip()
+        )
 
     def close(self) -> None:
         """Close the HTTP client."""

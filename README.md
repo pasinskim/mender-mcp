@@ -10,8 +10,10 @@ This project provides an MCP server that enables AI assistants like Claude Code 
 
 - **Device Management**: List devices, check device status, filter by device type
 - **Deployment Tracking**: Monitor deployment status, list deployments, check deployment details
+- **Deployment Logs**: Retrieve deployment logs for specific devices and deployments (when available)
 - **Release Management**: List releases, check release details, view release artifacts and metadata
 - **Artifact Information**: View available artifacts and their compatibility
+- **Device Inventory**: Access complete device inventory with hardware specs and custom attributes
 - **Read-only Operations**: Safe monitoring and status checking (no destructive operations)
 - **Personal Access Token Authentication**: Secure API access using Mender PATs
 
@@ -109,6 +111,9 @@ Once configured, you can use Claude Code to interact with your Mender devices:
 - "Show me details for release mender-demo-artifact-3.8.2"  
 - "List releases with 'demo' in the name"
 - "What artifacts are available?"
+- "Get deployment logs for device abc123 in deployment def456"
+- "Show me deployment logs for the latest deployment"
+- "What inventory information do you have for device abc123?"
 
 ### Available Tools
 
@@ -118,8 +123,13 @@ The server provides these tools:
 - **list_devices**: List devices with optional filtering (status, device type, limit 1-500, default 20)
 - **get_deployment_status**: Check deployment progress and details  
 - **list_deployments**: List deployments with optional filtering (status, limit 1-100, default 10)
+- **get_deployment_device_log**: Get deployment logs for a specific device in a deployment (logs typically available only for failed deployments)
+- **get_deployment_logs**: Get deployment logs for all devices in a deployment (provides summary view with preview of each device's logs)
 - **get_release_status**: Get detailed information about a specific release
 - **list_releases**: List releases with optional filtering (name, tag, limit 1-100, default 20)
+- **get_device_inventory**: Get complete inventory attributes for a specific device
+- **list_device_inventory**: List device inventories with optional filtering (limit 1-500, default 20)
+- **get_inventory_groups**: Get all device inventory groups
 
 ### Available Resources
 
@@ -129,18 +139,23 @@ The server provides these resources:
 - **mender://deployments**: All deployments 
 - **mender://artifacts**: Available artifacts
 - **mender://releases**: Complete release catalog
+- **mender://inventory**: Device inventory with hardware specs and custom attributes
+- **mender://inventory-groups**: Device grouping information
 - **mender://devices/{device_id}**: Specific device details
 - **mender://deployments/{deployment_id}**: Specific deployment details
 - **mender://releases/{release_name}**: Specific release details
+- **mender://inventory/{device_id}**: Specific device inventory details
 
 ## Display Formatting
 
 The server uses optimized display formatting for readability:
 
 ### Detail Views
-- **Device Types**: Shows first 3 device types, indicates remaining count (e.g., "+11 more")
-- **Release Tags**: Shows first 2 tags, indicates remaining count (e.g., "+3 more")
+- **Device Types**: Shows all device types in organized format (previously limited to 3)
+- **Release Tags**: Shows all tags in organized format (previously limited to 2)
 - **Artifact Details**: Full artifact information including ID, size, signing status
+- **Deployment Logs**: Chronological display with timestamps, log levels, and smart message truncation
+- **Device Inventory**: Organized by attribute categories with value truncation for long data
 
 ### List Views  
 - **Release Lists**: Shows primary artifact size and signing status
@@ -211,14 +226,21 @@ ruff check src/
 - Verify your MCP configuration file syntax is correct
 - Check Claude Code logs for connection errors
 
+### Deployment Logs Issues
+
+- **"No deployment logs found"**: This is normal for successful deployments - logs are typically only retained for failed deployments
+- **HTTP 404 errors**: Deployment logs API endpoints may not be available in your Mender configuration or API version
+- **Empty log responses**: Some Mender installations don't enable deployment logging by default
+
 ## Limitations
 
 - **Read-only**: No device control or deployment creation
 - **Rate Limits**: Subject to Mender API rate limits
 - **No Caching**: Always fetches fresh data (planned for iteration 2)  
 - **Single Tenant**: One Mender organization per server instance
-- **Display Truncation**: Device types limited to 3, tags to 2 in detailed views for readability
+- **Deployment Logs**: Available only for failed deployments or specific Mender configurations (successful deployment logs typically not retained)
 - **No Artifacts Filtering**: `get_artifacts()` method doesn't support filtering parameters
+- **API Version Dependencies**: Some features require specific Mender API versions (automatic fallback v2→v1)
 
 ## License
 
