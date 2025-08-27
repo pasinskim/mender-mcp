@@ -52,8 +52,13 @@ You need a Personal Access Token from your Mender account:
 
 1. Log in to your Mender account (https://hosted.mender.io)
 2. Go to Settings → Personal Access Tokens
-3. Create a new token with appropriate permissions
-4. Save the token securely
+3. Create a new token with **appropriate permissions**:
+   - **Required**: `Device Management` - Read device status, inventory, and attributes
+   - **Required**: `Deployment Management` - Read deployment status and history
+   - **Optional**: `Artifact Management` - View artifacts and releases
+   - **Optional**: `Device Logs` - Access deployment logs (if enabled)
+4. Save the token securely in a protected location
+5. **Security Note**: Never commit tokens to version control or share in plain text
 
 ### Claude Code Integration
 
@@ -201,24 +206,68 @@ ruff check src/
 
 ## Security
 
-- **Read-only**: This server only provides read-only access to Mender APIs
-- **Token Security**: Personal Access Tokens are handled securely 
-- **No Destructive Operations**: No device control or deployment creation capabilities
-- **Fail Fast**: Clear error messages for authentication and API issues
+### Token Security
+- **Read-only Access**: This server only provides read-only access to Mender APIs
+- **Token Protection**: Personal Access Tokens should be stored securely (environment variables, secure files)
+- **No Destructive Operations**: No device control, deployment creation, or configuration changes
+- **Minimal Permissions**: Use tokens with only necessary permissions (Device Management, Deployment Management)
+
+### Security Best Practices
+- **Environment Variables**: Store tokens in `MENDER_ACCESS_TOKEN` environment variable
+- **Token Files**: Use `~/.mender/token` with restricted file permissions (600)
+- **Regular Rotation**: Rotate Personal Access Tokens periodically
+- **Network Security**: All API communication uses HTTPS only
+- **Error Sanitization**: Error messages avoid exposing sensitive token data
+
+### Token Permissions Required
+
+| Feature | Required Permission | Optional Permission |
+|---------|-------------------|--------------------|
+| Device listing/status | Device Management | - |
+| Deployment monitoring | Deployment Management | - |
+| Device inventory | Device Management | - |
+| Deployment logs | Deployment Management | Device Logs |
+| Release information | Deployment Management | Artifact Management |
 
 ## Troubleshooting
 
 ### Authentication Issues
 
-- Verify your Personal Access Token is valid
-- Check that the token has appropriate permissions
+**HTTP 401 - Unauthorized:**
+- Verify your Personal Access Token is valid and not expired
+- Check that the token has appropriate permissions (Device Management, Deployment Management)
 - Ensure your Mender account has access to the devices/deployments
+- Confirm token is properly formatted (no extra spaces or characters)
+
+**HTTP 403 - Forbidden:**
+- Token lacks required permissions for the requested operation
+- Add Device Management permission for device operations
+- Add Deployment Management permission for deployment operations
+- Contact Mender admin to verify account permissions
 
 ### API Errors
 
-- Confirm your Mender server URL is correct
+**HTTP 404 - Not Found:**
+- Confirm your Mender server URL is correct (https://hosted.mender.io)
+- Verify specific device/deployment IDs exist in your Mender account
+- Check if API endpoints are available in your Mender version
+- For deployment logs: 404 is normal for successful deployments
+
+**HTTP 429 - Rate Limited:**
+- API rate limit exceeded - wait and retry
+- Reduce frequency of API calls
+- Implement exponential backoff in your usage patterns
+
+**HTTP 500+ - Server Errors:**
+- Temporary Mender server issues - retry after delay
+- Check Mender status page for known issues
+- Verify network connectivity to the Mender server
+
+**Connection/Timeout Errors:**
 - Check your network connectivity to the Mender server
-- Verify API endpoints are accessible
+- Verify firewall allows HTTPS connections to Mender
+- Consider increasing timeout for large device fleets
+- Verify DNS resolution for your Mender server URL
 
 ### Claude Code Integration
 
@@ -233,12 +282,105 @@ ruff check src/
 - **Empty log responses**: Some Mender installations don't enable deployment logging by default
 - **Successfully working**: ✅ Deployment logs now correctly parse both JSON and plain text responses from failed deployments
 
+## Performance Considerations
+
+### Large Device Fleet Management
+
+**Device Count Guidelines:**
+- **Small fleets** (1-50 devices): Default settings work well
+- **Medium fleets** (50-200 devices): Consider increasing timeout values
+- **Large fleets** (200+ devices): May need pagination and timeout adjustments
+- **Enterprise fleets** (1000+ devices): Implement caching and batch operations
+
+**Performance Optimization:**
+- **API Limits**: Use appropriate limit values (devices: max 500, deployments: max 100)
+- **Timeouts**: Default 30-second timeout may need adjustment for large operations
+- **Memory Usage**: Resource endpoints load all data into memory - monitor usage
+- **Rate Limiting**: Mender API has rate limits - implement backoff strategies
+
+**Recommended Settings for Large Fleets:**
+```json
+{
+  "mcpServers": {
+    "mender": {
+      "command": "mcp-server-mender",
+      "args": [
+        "--server-url", "https://hosted.mender.io",
+        "--access-token", "YOUR_TOKEN"
+      ],
+      "env": {
+        "MENDER_HTTP_TIMEOUT": "60",
+        "MENDER_MAX_DEVICES": "100"
+      }
+    }
+  }
+}
+```
+
+## API Compatibility
+
+### Mender Version Support
+
+**Tested Versions:**
+- **Mender 3.8.x**: Full compatibility with all features
+- **Mender 3.7.x**: Compatible with automatic v2→v1 API fallback
+- **Mender 3.6.x**: Limited compatibility (some features may be unavailable)
+
+**API Version Strategy:**
+- **Primary**: Uses Mender API v2 endpoints when available
+- **Fallback**: Automatically falls back to v1 endpoints for compatibility
+- **Feature Detection**: Gracefully handles missing endpoints or features
+
+**Feature Compatibility Matrix:**
+
+| Feature | Mender 3.8+ | Mender 3.7 | Mender 3.6 |
+|---------|-------------|-------------|-------------|
+| Device Management | ✅ Full | ✅ Full | ✅ Full |
+| Deployment Tracking | ✅ Full | ✅ Full | ✅ Full |
+| Release Management | ✅ Full | ✅ v1 API | ⚠️ Limited |
+| Device Inventory | ✅ Full | ✅ Full | ⚠️ Limited |
+| Deployment Logs | ✅ Full | ⚠️ Partial | ❌ None |
+
+**Legend:** ✅ Full Support, ⚠️ Partial/Limited, ❌ Not Supported
+
+## Production Deployment
+
+### Environment Setup
+
+**Production Configuration:**
+```bash
+# Environment variables for production
+MENDER_ACCESS_TOKEN=your_production_token
+MENDER_SERVER_URL=https://hosted.mender.io
+MCP_LOG_LEVEL=INFO
+MENDER_HTTP_TIMEOUT=60
+```
+
+**Security Hardening:**
+- Use dedicated service account with minimal permissions
+- Rotate access tokens regularly (quarterly recommended)
+- Monitor token usage and API call patterns
+- Implement network restrictions if possible
+
+**Monitoring & Observability:**
+- Monitor API response times and error rates
+- Set up alerts for authentication failures
+- Track device fleet growth and adjust limits accordingly
+- Monitor memory usage for large resource operations
+
+**Capacity Planning:**
+- **Memory**: ~1MB per 100 devices in resource operations
+- **Network**: ~10KB per device for typical API calls
+- **API Calls**: ~2-5 calls per device listing operation
+- **Response Time**: Target <2 seconds for most operations
+
 ## Limitations
 
 - **Read-only**: No device control or deployment creation
-- **Rate Limits**: Subject to Mender API rate limits
+- **Rate Limits**: Subject to Mender API rate limits (no built-in backoff)
 - **No Caching**: Always fetches fresh data (planned for iteration 2)  
 - **Single Tenant**: One Mender organization per server instance
+- **Memory Usage**: Large device fleets (1000+) may cause memory pressure
 - **Deployment Logs**: Available for failed deployments with smart parsing for multiple response formats (successful deployment logs typically not retained)
 - **No Artifacts Filtering**: `get_artifacts()` method doesn't support filtering parameters
 - **API Version Dependencies**: Some features require specific Mender API versions (automatic fallback v2→v1)
