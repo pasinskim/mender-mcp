@@ -190,6 +190,64 @@ class MenderAPIClient:
         except json.JSONDecodeError as e:
             raise MenderAPIError(f"Invalid JSON response: {str(e)}")
 
+    def _make_logs_request(self, method: str, endpoint: str, **kwargs) -> Any:
+        """Make HTTP request for deployment logs that can handle various response formats.
+        
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            endpoint: API endpoint path
+            **kwargs: Additional arguments for httpx request
+            
+        Returns:
+            Response data in original format (JSON dict, string, or raw content)
+            
+        Raises:
+            MenderAPIError: If request fails or returns error status
+        """
+        url = urljoin(self.server_url, endpoint)
+
+        try:
+            response = self.client.request(method, url, **kwargs)
+            response.raise_for_status()
+
+            # Handle empty responses
+            if not response.content:
+                return ""
+
+            # Try to determine response format based on content type
+            content_type = response.headers.get("content-type", "").lower()
+            
+            # Try JSON first for structured log responses
+            if "application/json" in content_type:
+                try:
+                    return response.json()
+                except json.JSONDecodeError:
+                    # Fallback to text if JSON parsing fails
+                    pass
+            
+            # Handle text-based responses (logs are often plain text)
+            if any(text_type in content_type for text_type in ["text/", "application/text"]):
+                return response.text
+            
+            # Try JSON parsing even without explicit content-type
+            try:
+                return response.json()
+            except json.JSONDecodeError:
+                pass
+            
+            # Try text decoding for any other content
+            try:
+                return response.text
+            except UnicodeDecodeError:
+                # If text decoding fails, return raw bytes as string representation
+                return f"Binary content ({len(response.content)} bytes): {response.content[:100]!r}..."
+
+        except httpx.HTTPStatusError as e:
+            error_msg = f"HTTP {e.response.status_code}: {e.response.text}"
+            raise MenderAPIError(error_msg, e.response.status_code)
+        except httpx.RequestError as e:
+            raise MenderAPIError(f"Request failed: {str(e)}")
+
     def get_devices(self,
                    status: Optional[str] = None,
                    device_type: Optional[str] = None,
@@ -551,14 +609,14 @@ class MenderAPIClient:
         """
         # Try v2 endpoint first, fallback to v1 if not available
         try:
-            data = self._make_request(
+            data = self._make_logs_request(
                 "GET",
                 f"/api/management/v2/deployments/deployments/{deployment_id}/devices/{device_id}/log"
             )
         except MenderAPIError as e:
             if e.status_code == 404:
                 # Try v1 endpoint as fallback
-                data = self._make_request(
+                data = self._make_logs_request(
                     "GET", 
                     f"/api/management/v1/deployments/deployments/{deployment_id}/devices/{device_id}/log"
                 )

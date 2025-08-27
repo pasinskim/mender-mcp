@@ -818,3 +818,53 @@ def test_format_deployment_logs_output_many_entries():
         assert "Log entry 2" in output
         assert "... and 2 more entries" in output  # Should show preview of first 3
 
+
+def test_make_logs_request_handles_plain_text():
+    """Test that _make_logs_request handles plain text responses correctly."""
+    from unittest.mock import Mock
+    
+    client = MenderAPIClient("https://hosted.mender.io", "test_token")
+    
+    # Mock response with plain text content
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "text/plain"}
+    mock_response.content = b"2025-08-27T12:30:45Z INFO: Starting deployment\nLog entry 2"
+    mock_response.text = "2025-08-27T12:30:45Z INFO: Starting deployment\nLog entry 2"
+    mock_response.raise_for_status.return_value = None
+    
+    # Mock the client request method
+    client.client.request = Mock(return_value=mock_response)
+    
+    result = client._make_logs_request("GET", "/test/endpoint")
+    
+    assert isinstance(result, str)
+    assert "Starting deployment" in result
+    assert "Log entry 2" in result
+
+
+def test_make_logs_request_handles_json_fallback():
+    """Test that _make_logs_request falls back to JSON parsing when content-type is wrong."""
+    from unittest.mock import Mock
+    import json
+    
+    client = MenderAPIClient("https://hosted.mender.io", "test_token")
+    
+    # Mock response with JSON content but wrong content-type
+    json_data = {"entries": [{"message": "test log"}]}
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/octet-stream"}  # Wrong content type
+    mock_response.content = json.dumps(json_data).encode()
+    mock_response.json.return_value = json_data
+    mock_response.raise_for_status.return_value = None
+    
+    # Mock the client request method
+    client.client.request = Mock(return_value=mock_response)
+    
+    result = client._make_logs_request("GET", "/test/endpoint")
+    
+    assert isinstance(result, dict)
+    assert "entries" in result
+    assert result["entries"][0]["message"] == "test log"
+

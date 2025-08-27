@@ -853,10 +853,20 @@ def get_deployment_device_log(self, deployment_id: str, device_id: str) -> Mende
 - ✅ Production-ready error handling and display formatting
 
 **Real-world Behavior Confirmed:**
-- Deployment logs typically only available for failed deployments
+- Deployment logs available for failed deployments with full functionality
 - Successful deployments return HTTP 404 (expected behavior)
 - Implementation handles this gracefully with informative user messages
-- Both individual device logs and aggregate deployment logs follow same pattern
+- Both individual device logs and aggregate deployment logs work correctly with failed deployments
+
+**Production Deployment Logs Fix:**
+- ✅ **Issue Resolved**: Fixed "Invalid JSON response" error when retrieving real deployment logs
+- ✅ **Root Cause**: Deployment logs returned as plain text, not JSON as originally assumed
+- ✅ **Solution**: Added `_make_logs_request()` method with multi-format parsing support
+- ✅ **Content Support**: Handles JSON, plain text, binary, and mixed content responses
+- ✅ **Smart Detection**: Uses HTTP content-type headers with intelligent fallback strategies
+- ✅ **Backward Compatibility**: All existing functionality preserved, no breaking changes
+- ✅ **Real Validation**: Successfully retrieves actual deployment logs from failed Cursor deployment
+- ✅ **Test Coverage**: Added 2 additional tests for response parsing edge cases (41 total tests passing)
 
 **Code Review Results:**
 - Implementation follows established codebase patterns

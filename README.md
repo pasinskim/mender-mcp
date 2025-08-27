@@ -123,7 +123,7 @@ The server provides these tools:
 - **list_devices**: List devices with optional filtering (status, device type, limit 1-500, default 20)
 - **get_deployment_status**: Check deployment progress and details  
 - **list_deployments**: List deployments with optional filtering (status, limit 1-100, default 10)
-- **get_deployment_device_log**: Get deployment logs for a specific device in a deployment (logs typically available only for failed deployments)
+- **get_deployment_device_log**: Get deployment logs for a specific device in a deployment (✅ works with failed deployments)
 - **get_deployment_logs**: Get deployment logs for all devices in a deployment (provides summary view with preview of each device's logs)
 - **get_release_status**: Get detailed information about a specific release
 - **list_releases**: List releases with optional filtering (name, tag, limit 1-100, default 20)
@@ -229,8 +229,9 @@ ruff check src/
 ### Deployment Logs Issues
 
 - **"No deployment logs found"**: This is normal for successful deployments - logs are typically only retained for failed deployments
-- **HTTP 404 errors**: Deployment logs API endpoints may not be available in your Mender configuration or API version
+- **HTTP 404 errors**: Deployment logs API endpoints may not be available in your Mender configuration or API version  
 - **Empty log responses**: Some Mender installations don't enable deployment logging by default
+- **Successfully working**: ✅ Deployment logs now correctly parse both JSON and plain text responses from failed deployments
 
 ## Limitations
 
@@ -238,7 +239,7 @@ ruff check src/
 - **Rate Limits**: Subject to Mender API rate limits
 - **No Caching**: Always fetches fresh data (planned for iteration 2)  
 - **Single Tenant**: One Mender organization per server instance
-- **Deployment Logs**: Available only for failed deployments or specific Mender configurations (successful deployment logs typically not retained)
+- **Deployment Logs**: Available for failed deployments with smart parsing for multiple response formats (successful deployment logs typically not retained)
 - **No Artifacts Filtering**: `get_artifacts()` method doesn't support filtering parameters
 - **API Version Dependencies**: Some features require specific Mender API versions (automatic fallback v2→v1)
 
