@@ -228,6 +228,16 @@ Once configured, you can interact with your Mender devices using natural languag
 "What's the geographic distribution of my devices?" (if location data available)
 ```
 
+### Audit Logs
+```
+"Show me the audit logs for the last 24 hours"
+"Get audit logs for user admin@company.com"
+"Show me all device_accept actions in the logs"
+"What deployment actions were performed yesterday?"
+"Show me audit logs filtered by deployment object type"
+"Get recent login attempts from the audit logs"
+```
+
 ### Automated Workflows
 ```
 "Create a report of all failed deployments this month"
@@ -290,6 +300,7 @@ mcp-server-mender --server-url https://mender.company.com --token-file ~/.mender
 - **get_device_inventory**: Get complete inventory attributes for a device
 - **list_device_inventory**: List device inventories with filtering
 - **get_inventory_groups**: Get all device inventory groups
+- **get_audit_logs**: Get Mender audit logs with comprehensive filtering (user, action, date range, object type)
 
 ### MCP Resources (Data Access)
 - **mender://devices**: Complete device inventory
@@ -298,6 +309,7 @@ mcp-server-mender --server-url https://mender.company.com --token-file ~/.mender
 - **mender://releases**: Complete release catalog
 - **mender://inventory**: Device inventory with hardware specs and custom attributes
 - **mender://inventory-groups**: Device grouping information
+- **mender://audit-logs**: System audit logs for user actions and system changes
 - **mender://devices/{device_id}**: Specific device details
 - **mender://deployments/{deployment_id}**: Specific deployment details
 - **mender://releases/{release_name}**: Specific release details

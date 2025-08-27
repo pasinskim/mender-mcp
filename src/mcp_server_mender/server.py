@@ -81,6 +81,12 @@ class MenderMCPServer:
                     description="Device grouping information",
                     mimeType="application/json",
                 ),
+                Resource(
+                    uri=AnyUrl("mender://audit-logs"),
+                    name="Audit Logs",
+                    description="System audit logs for user actions and system changes",
+                    mimeType="application/json",
+                ),
             ]
 
         @self.server.read_resource()
@@ -132,6 +138,10 @@ class MenderMCPServer:
                 elif uri_str == "mender://inventory-groups":
                     groups = self.mender_client.get_inventory_groups()
                     return self._format_inventory_groups_output(groups)
+
+                elif uri_str == "mender://audit-logs":
+                    audit_log = self.mender_client.get_audit_logs(limit=100)
+                    return self._format_audit_log_output(audit_log)
 
                 else:
                     raise ValueError(f"Unknown resource: {uri}")
@@ -330,6 +340,42 @@ class MenderMCPServer:
                         },
                         "required": ["deployment_id"]
                     }
+                ),
+                Tool(
+                    name="get_audit_logs",
+                    description="Get Mender audit logs with optional filtering",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "limit": {
+                                "type": "integer",
+                                "description": "Maximum number of audit log entries to return",
+                                "minimum": 1,
+                                "maximum": 1000,
+                                "default": 50
+                            },
+                            "user": {
+                                "type": "string",
+                                "description": "Filter by user ID or username"
+                            },
+                            "action": {
+                                "type": "string", 
+                                "description": "Filter by action type (e.g., 'login', 'deploy', 'device_accept')"
+                            },
+                            "object_type": {
+                                "type": "string",
+                                "description": "Filter by object type (e.g., 'device', 'deployment', 'user')"
+                            },
+                            "start_date": {
+                                "type": "string",
+                                "description": "Filter from date (ISO format, e.g., '2023-08-27T00:00:00Z')"
+                            },
+                            "end_date": {
+                                "type": "string", 
+                                "description": "Filter to date (ISO format, e.g., '2023-08-27T23:59:59Z')"
+                            }
+                        }
+                    }
                 )
             ]
 
@@ -462,6 +508,52 @@ class MenderMCPServer:
                     deployment_id = validated["deployment_id"]
                     logs = self.mender_client.get_deployment_logs(deployment_id)
                     result = self._format_deployment_logs_output(logs)
+
+                elif name == "get_audit_logs":
+                    # Validate input parameters with comprehensive filtering support
+                    from datetime import datetime
+                    
+                    # Validate limit parameter
+                    limit = arguments.get("limit", 50)
+                    if limit and (not isinstance(limit, int) or limit < 1 or limit > 1000):
+                        raise ValueError("Limit must be an integer between 1 and 1000")
+                    
+                    # Validate and parse date filters
+                    start_date = None
+                    end_date = None
+                    
+                    if arguments.get("start_date"):
+                        try:
+                            start_date = datetime.fromisoformat(arguments["start_date"].replace('Z', '+00:00'))
+                        except ValueError:
+                            raise ValueError("start_date must be in ISO format (e.g., '2023-08-27T00:00:00Z')")
+                    
+                    if arguments.get("end_date"):
+                        try:
+                            end_date = datetime.fromisoformat(arguments["end_date"].replace('Z', '+00:00'))
+                        except ValueError:
+                            raise ValueError("end_date must be in ISO format (e.g., '2023-08-27T23:59:59Z')")
+                    
+                    # Validate and sanitize string filters
+                    user = arguments.get("user")
+                    action = arguments.get("action")
+                    object_type = arguments.get("object_type")
+                    
+                    # Basic sanitization for string parameters
+                    for param_name, param_value in [("user", user), ("action", action), ("object_type", object_type)]:
+                        if param_value and ('..' in param_value or '/' in param_value or '<' in param_value or '>' in param_value):
+                            raise ValueError(f"Invalid {param_name} filter format")
+                    
+                    # Get audit logs with all filters
+                    audit_log = self.mender_client.get_audit_logs(
+                        limit=limit,
+                        start_date=start_date,
+                        end_date=end_date,
+                        user=user,
+                        action=action,
+                        object_type=object_type
+                    )
+                    result = self._format_audit_log_output(audit_log)
 
                 else:
                     result = f"Unknown tool: {name}"
@@ -902,6 +994,107 @@ class MenderMCPServer:
             output += "\n"
         
         output += "Use 'get_deployment_device_log' for complete logs of specific devices.\n"
+        
+        return output
+
+    def _format_audit_log_output(self, audit_log) -> str:
+        """Format audit log entries for display."""
+        from datetime import datetime
+        from .mender_api import MenderAuditLog
+        
+        if not isinstance(audit_log, MenderAuditLog):
+            return f"Invalid audit log data: {str(audit_log)}"
+        
+        output = f"Mender Audit Logs\n"
+        output += f"==================\n"
+        
+        if audit_log.retrieved_at:
+            output += f"Retrieved: {audit_log.retrieved_at.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+        
+        if audit_log.total_count is not None:
+            output += f"Total Entries: {audit_log.total_count}\n"
+            output += f"Showing: {len(audit_log.entries)}\n"
+        else:
+            output += f"Entries: {len(audit_log.entries)}\n"
+        
+        output += "\n"
+        
+        if not audit_log.entries:
+            output += "No audit log entries found.\n"
+            output += "This may be due to:\n"
+            output += "• Audit logging not enabled for this Mender instance\n"
+            output += "• Insufficient permissions to access audit logs\n"
+            output += "• No matching entries for the specified filters\n"
+            output += "• Audit logs API not available in this Mender version\n"
+            return output
+        
+        output += "Audit Log Entries (newest first):\n"
+        output += "==================================\n"
+        
+        # Sort entries by timestamp (newest first)
+        sorted_entries = sorted(
+            audit_log.entries,
+            key=lambda x: x.timestamp or datetime.min,
+            reverse=True
+        )
+        
+        for i, entry in enumerate(sorted_entries):
+            if i > 0:
+                output += "\n" + "-" * 60 + "\n"
+            
+            # Format timestamp
+            if entry.timestamp:
+                timestamp_str = entry.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC")
+                output += f"Time: {timestamp_str}\n"
+            
+            # Format user information
+            if entry.user:
+                output += f"User: {entry.user}\n"
+            
+            # Format action
+            if entry.action:
+                output += f"Action: {entry.action}\n"
+            
+            # Format object information
+            if entry.object_type or entry.object_id:
+                object_info = []
+                if entry.object_type:
+                    object_info.append(f"Type: {entry.object_type}")
+                if entry.object_id:
+                    # Truncate long object IDs for readability
+                    obj_id = entry.object_id
+                    if len(obj_id) > 40:
+                        obj_id = obj_id[:37] + "..."
+                    object_info.append(f"ID: {obj_id}")
+                output += f"Object: {', '.join(object_info)}\n"
+            
+            # Format result/status
+            if entry.result:
+                output += f"Result: {entry.result}\n"
+            
+            # Format context information
+            context_info = []
+            if entry.ip_address:
+                context_info.append(f"IP: {entry.ip_address}")
+            if entry.user_agent:
+                # Truncate long user agents
+                user_agent = entry.user_agent
+                if len(user_agent) > 60:
+                    user_agent = user_agent[:57] + "..."
+                context_info.append(f"Agent: {user_agent}")
+            
+            if context_info:
+                output += f"Context: {', '.join(context_info)}\n"
+            
+            # Format additional details
+            if entry.details:
+                output += "Details:\n"
+                for key, value in entry.details.items():
+                    # Truncate long detail values
+                    value_str = str(value)
+                    if len(value_str) > 80:
+                        value_str = value_str[:77] + "..."
+                    output += f"  {key}: {value_str}\n"
         
         return output
 

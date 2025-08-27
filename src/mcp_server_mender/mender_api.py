@@ -125,6 +125,28 @@ class MenderDeploymentLog(BaseModel):
     retrieved_at: Optional[datetime] = None
 
 
+class MenderAuditLogEntry(BaseModel):
+    """Individual audit log entry."""
+    
+    timestamp: Optional[datetime] = None
+    user: Optional[str] = None
+    action: Optional[str] = None
+    object_type: Optional[str] = None
+    object_id: Optional[str] = None
+    result: Optional[str] = None
+    details: Optional[Dict[str, Any]] = None
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+
+
+class MenderAuditLog(BaseModel):
+    """Mender audit log response."""
+    
+    entries: List[MenderAuditLogEntry] = []
+    total_count: Optional[int] = None
+    retrieved_at: Optional[datetime] = None
+
+
 class MenderAPIError(Exception):
     """Exception raised for Mender API errors."""
 
@@ -856,6 +878,216 @@ class MenderAPIClient:
             timestamp=timestamp,
             level=level,
             message=message or line.strip()
+        )
+
+    def get_audit_logs(self,
+                      limit: Optional[int] = None,
+                      skip: Optional[int] = None,
+                      start_date: Optional[datetime] = None,
+                      end_date: Optional[datetime] = None,
+                      user: Optional[str] = None,
+                      action: Optional[str] = None,
+                      object_type: Optional[str] = None) -> MenderAuditLog:
+        """Get audit logs with comprehensive filtering and endpoint fallback.
+        
+        Args:
+            limit: Maximum number of entries to return (default: 50, max: 1000)
+            skip: Number of entries to skip for pagination
+            start_date: Filter from this timestamp (inclusive)
+            end_date: Filter to this timestamp (inclusive)  
+            user: Filter by user ID or username
+            action: Filter by action type (e.g., 'login', 'deploy', 'device_accept')
+            object_type: Filter by object type (e.g., 'device', 'deployment', 'user')
+            
+        Returns:
+            MenderAuditLog object with entries and metadata
+            
+        Raises:
+            MenderAPIError: If audit logs API is not available or request fails
+        """
+        # Prepare query parameters
+        params = {}
+        if limit:
+            params["per_page"] = min(limit, 1000)  # Cap at 1000 for safety
+        if skip:
+            params["page"] = (skip // (limit or 50)) + 1
+        if start_date:
+            params["start_date"] = start_date.isoformat()
+        if end_date:
+            params["end_date"] = end_date.isoformat()
+        if user:
+            params["user"] = user
+        if action:
+            params["action"] = action
+        if object_type:
+            params["object_type"] = object_type
+            
+        # List of endpoints to try, in order of preference
+        endpoints_to_try = [
+            "/api/management/v1/auditlogs/logs",  # Correct working endpoint
+            "/api/management/v2/auditlogs/logs"   # Future v2 version
+        ]
+        
+        # Try each endpoint until one works
+        last_error = None
+        for endpoint in endpoints_to_try:
+            try:
+                self.security_logger.log_secure(
+                    logging.DEBUG,
+                    f"Trying audit logs endpoint: {endpoint}"
+                )
+                
+                data = self._make_request("GET", endpoint, params=params)
+                
+                # Successfully got data, parse and return
+                return self._parse_audit_log_response(data)
+                
+            except MenderAPIError as e:
+                last_error = e
+                if e.status_code == 404:
+                    # Endpoint not found, try next one
+                    continue
+                elif e.status_code == 403:
+                    # Permission denied - this is likely the real issue
+                    raise MenderAPIError(
+                        "Insufficient permissions to access audit logs. "
+                        "Please ensure your Personal Access Token has audit log read permissions.",
+                        403
+                    )
+                elif e.status_code == 401:
+                    # Authentication failed
+                    raise MenderAPIError(
+                        "Authentication failed. Please check your Personal Access Token.",
+                        401
+                    )
+                else:
+                    # Other error - don't continue trying endpoints
+                    raise
+        
+        # If we get here, none of the endpoints worked
+        if last_error and last_error.status_code == 404:
+            raise MenderAPIError(
+                "Audit logs API is not available for this Mender instance. "
+                "This feature may not be supported in your Mender version or deployment.",
+                404
+            )
+        else:
+            # Re-raise the last error we encountered
+            raise last_error or MenderAPIError("Failed to retrieve audit logs")
+
+    def _parse_audit_log_response(self, data: Any) -> MenderAuditLog:
+        """Parse audit log response into MenderAuditLog object.
+        
+        Args:
+            data: Raw response data from API
+            
+        Returns:
+            MenderAuditLog object with parsed entries
+        """
+        entries = []
+        total_count = None
+        
+        if isinstance(data, list):
+            # Simple array of audit entries
+            for entry_data in data:
+                if isinstance(entry_data, dict):
+                    entries.append(self._parse_audit_entry(entry_data))
+            total_count = len(entries)
+            
+        elif isinstance(data, dict):
+            # Structured response with metadata
+            if "entries" in data:
+                # Standard format: {"entries": [...], "total": N}
+                for entry_data in data["entries"]:
+                    if isinstance(entry_data, dict):
+                        entries.append(self._parse_audit_entry(entry_data))
+                total_count = data.get("total", data.get("total_count", len(entries)))
+                
+            elif "logs" in data:
+                # Alternative format: {"logs": [...], "count": N}
+                for entry_data in data["logs"]:
+                    if isinstance(entry_data, dict):
+                        entries.append(self._parse_audit_entry(entry_data))
+                total_count = data.get("count", data.get("total", len(entries)))
+                
+            else:
+                # Treat entire response as single entry
+                entries.append(self._parse_audit_entry(data))
+                total_count = 1
+        
+        return MenderAuditLog(
+            entries=entries,
+            total_count=total_count,
+            retrieved_at=datetime.now()
+        )
+
+    def _parse_audit_entry(self, entry_data: Dict[str, Any]) -> MenderAuditLogEntry:
+        """Parse individual audit log entry.
+        
+        Args:
+            entry_data: Raw audit entry data
+            
+        Returns:
+            MenderAuditLogEntry object
+        """
+        # Parse timestamp
+        timestamp = None
+        for ts_field in ["timestamp", "created_ts", "time", "date"]:
+            if ts_field in entry_data and entry_data[ts_field]:
+                try:
+                    if isinstance(entry_data[ts_field], str):
+                        from dateutil.parser import parse
+                        timestamp = parse(entry_data[ts_field])
+                    elif isinstance(entry_data[ts_field], datetime):
+                        timestamp = entry_data[ts_field]
+                    break
+                except:
+                    continue
+        
+        # Extract user information
+        user = entry_data.get("user") or entry_data.get("user_id") or entry_data.get("username")
+        
+        # Extract action information
+        action = entry_data.get("action") or entry_data.get("operation") or entry_data.get("event")
+        
+        # Extract object information
+        object_type = entry_data.get("object_type") or entry_data.get("resource_type") or entry_data.get("type")
+        object_id = entry_data.get("object_id") or entry_data.get("resource_id") or entry_data.get("id")
+        
+        # Extract result/status
+        result = entry_data.get("result") or entry_data.get("status") or entry_data.get("outcome")
+        
+        # Extract context information
+        ip_address = entry_data.get("ip_address") or entry_data.get("ip") or entry_data.get("remote_addr")
+        user_agent = entry_data.get("user_agent") or entry_data.get("agent")
+        
+        # Extract details (everything else)
+        details = {}
+        excluded_fields = {
+            "timestamp", "created_ts", "time", "date",
+            "user", "user_id", "username", 
+            "action", "operation", "event",
+            "object_type", "resource_type", "type",
+            "object_id", "resource_id", "id",
+            "result", "status", "outcome",
+            "ip_address", "ip", "remote_addr",
+            "user_agent", "agent"
+        }
+        
+        for key, value in entry_data.items():
+            if key not in excluded_fields:
+                details[key] = value
+        
+        return MenderAuditLogEntry(
+            timestamp=timestamp,
+            user=user,
+            action=action,
+            object_type=object_type,
+            object_id=object_id,
+            result=result,
+            details=details if details else None,
+            ip_address=ip_address,
+            user_agent=user_agent
         )
 
     def close(self) -> None:
