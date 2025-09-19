@@ -1112,8 +1112,8 @@ class MenderMCPServer:
 @click.option(
     "--server-url",
     required=False,
-    help="Mender server URL (default: https://hosted.mender.io)",
-    default="https://hosted.mender.io"
+    help="Mender server URL (default: https://eu.hosted.mender.io)",
+    default="https://eu.hosted.mender.io"
 )
 @click.option(
     "--access-token",
