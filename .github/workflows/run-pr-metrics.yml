@@ -1,0 +1,16 @@
+name: Run Weekly PR Metrics
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * 1' # Run at 8 AM every Monday
+
+jobs:
+  call-reusable-workflow:
+    uses: ./.github/workflows/issue-metrics.yml
+    with:
+      # IMPORTANT: Replace with a comma-separated list of your team's GitHub usernames
+      team-members: 'pasinskim, Copilot, claude'
+      # Optional: Add comma-separated labels to exclude
+      excluded-labels: 'dependabot,wip'
+    secrets:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
