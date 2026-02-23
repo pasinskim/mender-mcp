@@ -8,7 +8,6 @@ permissions:
   contents: read
   issues: write
   pull-requests: read
-  members: read # Required to read team members
 
 jobs:
   build:
@@ -31,8 +30,8 @@ jobs:
       - name: Run PR Metrics Script
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # IMPORTANT: Replace 'my-team' with your team's slug
-          TEAM_SLUG: 'my-team'
+          # IMPORTANT: Replace with a comma-separated list of your team's GitHub usernames
+          TEAM_MEMBERS: 'pasinskim,claude'
           # Optional: Add comma-separated labels to exclude
           EXCLUDED_LABELS: 'dependabot,wip'
         run: python src/mcp_server_mender/pr_metrics.py
@@ -42,5 +41,3 @@ jobs:
         with:
           title: Monthly PR Metrics Report
           content-filepath: ./pr_metrics_report.md
-          # Optional: Assign the issue to your team
-          # team-assignees: my-team
