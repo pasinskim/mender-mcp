@@ -7,6 +7,9 @@ on:
 jobs:
   call-reusable-workflow:
     uses: ./.github/workflows/issue-metrics.yml
+    permissions:
+      issues: write
+      pull-requests: read
     with:
       # IMPORTANT: Replace with a comma-separated list of your team's GitHub usernames
       team-members: 'pasinskim, Copilot, claude'
