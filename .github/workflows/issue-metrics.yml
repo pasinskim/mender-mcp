@@ -1,4 +1,4 @@
-name: Monthly issue metrics
+name: Monthly PR metrics
 on:
   workflow_dispatch:
 
@@ -7,34 +7,30 @@ permissions:
 
 jobs:
   build:
-    name: issue metrics
+    name: PR metrics
     runs-on: ubuntu-latest
     permissions:
       issues: write
       pull-requests: read
 
     steps:
-      - name: Get dates for last month
+      - name: Get date for last 30 days
         shell: bash
         run: |
-          # Calculate the first day of the previous month
-          first_day=$(date -d "last month" +%Y-%m-01)
+          # Calculate the date 30 days ago
+          start_date=$(date -d "30 days ago" +%Y-%m-%d)
 
-          # Calculate the last day of the previous month
-          last_day=$(date -d "$first_day +1 month -1 day" +%Y-%m-%d)
+          #Set an environment variable with the date
+          echo "start_date=$start_date" >> "$GITHUB_ENV"
 
-          #Set an environment variable with the date range
-          echo "$first_day..$last_day"
-          echo "last_month=$first_day..$last_day" >> "$GITHUB_ENV"
-
-      - name: Get issue metrics
+      - name: Get PR metrics
         uses: github/issue-metrics@v3
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SEARCH_QUERY: 'repo:${{ github.repository }} is:issue created:${{ env.last_month }} -reason:"not planned"'
+          SEARCH_QUERY: 'repo:${{ github.repository }} is:pr created:>=${{ env.start_date }}'
 
       - name: Create issue
         uses: peter-evans/create-issue-from-file@v4
         with:
-          title: Monthly issue metrics report (dev)
+          title: Monthly PR metrics report (dev)
           content-filepath: ./issue_metrics.md
