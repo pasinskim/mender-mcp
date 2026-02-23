@@ -1,7 +1,7 @@
 # src/mcp_server_mender/pr_metrics.py
 import os
-from datetime import datetime, timedelta
-from github import Github
+from datetime import datetime, timedelta, timezone
+from github import Github, Auth
 
 def get_env_vars():
     """Get and validate required environment variables."""
@@ -37,10 +37,11 @@ def main():
     """Main function to generate PR metrics report."""
     token, repo_name, team_members, excluded_labels = get_env_vars()
 
-    g = Github(token)
+    auth = Auth.Token(token)
+    g = Github(auth=auth)
     repo = g.get_repo(repo_name)
 
-    thirty_days_ago = datetime.now() - timedelta(days=30)
+    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
     pulls = repo.get_pulls(state='all', sort='created', direction='desc')
 
     report_lines = [f"# PR Metrics Report for `{repo_name}`"]
@@ -74,7 +75,7 @@ def main():
                 member_stats[reviewer]["time_to_first_review"].append(time_to_review)
 
         if pr.state == 'open' and not reviews:
-            wait_time = get_business_timedelta(pr.created_at, datetime.now())
+            wait_time = get_business_timedelta(pr.created_at, datetime.now(timezone.utc))
             if wait_time > timedelta(hours=48):
                 stale_prs.append(f"- [#{pr.number}]({pr.html_url}) by {author} - waiting {int(wait_time.total_seconds() / 3600)}h")
 
