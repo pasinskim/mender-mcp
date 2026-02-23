@@ -1,8 +1,19 @@
-name: Monthly PR Metrics Report
+name: Reusable PR Metrics Collector
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: '0 8 1 * *' # Run at 8 AM on the first day of every month
+  workflow_call:
+    inputs:
+      team-members:
+        description: 'Comma-separated list of GitHub usernames'
+        required: true
+        type: string
+      excluded-labels:
+        description: 'Comma-separated list of labels to exclude from metrics'
+        required: false
+        type: string
+        default: 'dependabot,wip'
+    secrets:
+      GH_TOKEN:
+        required: true
 
 permissions:
   contents: read
@@ -29,15 +40,13 @@ jobs:
 
       - name: Run PR Metrics Script
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # IMPORTANT: Replace with a comma-separated list of your team's GitHub usernames
-          TEAM_MEMBERS: 'pasinskim,claude'
-          # Optional: Add comma-separated labels to exclude
-          EXCLUDED_LABELS: 'dependabot,wip'
-        run: python src/mcp_server_mender/pr_metrics.py
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          TEAM_MEMBERS: ${{ inputs.team-members }}
+          EXCLUDED_LABELS: ${{ inputs.excluded-labels }}
+        run: python scripts/pr_metrics.py
 
       - name: Create Issue from Report
         uses: peter-evans/create-issue-from-file@v4
         with:
-          title: Monthly PR Metrics Report
+          title: Weekly PR Metrics Report
           content-filepath: ./pr_metrics_report.md
