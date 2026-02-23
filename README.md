@@ -419,3 +419,7 @@ Contributions are welcome! Please read our contributing guidelines and submit pu
 - **Documentation**: This README and inline help (`--help`)
 - **Issues**: GitHub Issues for bug reports and feature requests
 - **Community**: Mender Community Hub for general IoT device management discussions
+
+## Issues Metrics 
+
+This is an example of how to test issues metrics. 
