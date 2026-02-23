@@ -8,6 +8,7 @@ jobs:
   call-reusable-workflow:
     uses: ./.github/workflows/issue-metrics.yml
     permissions:
+      contents: read
       issues: write
       pull-requests: read
     with:
