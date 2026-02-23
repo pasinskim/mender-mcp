@@ -1,36 +1,46 @@
-name: Monthly PR metrics
+name: Monthly PR Metrics Report
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 8 1 * *' # Run at 8 AM on the first day of every month
 
 permissions:
   contents: read
+  issues: write
+  pull-requests: read
+  members: read # Required to read team members
 
 jobs:
   build:
-    name: PR metrics
+    name: Generate PR Metrics
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
-      pull-requests: read
-
     steps:
-      - name: Get date for last 30 days
-        shell: bash
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
         run: |
-          # Calculate the date 30 days ago
-          start_date=$(date -d "30 days ago" +%Y-%m-%d)
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-          #Set an environment variable with the date
-          echo "start_date=$start_date" >> "$GITHUB_ENV"
-
-      - name: Get PR metrics
-        uses: github/issue-metrics@v3
+      - name: Run PR Metrics Script
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SEARCH_QUERY: 'repo:${{ github.repository }} is:pr created:>=${{ env.start_date }}'
+          # IMPORTANT: Replace 'my-team' with your team's slug
+          TEAM_SLUG: 'my-team'
+          # Optional: Add comma-separated labels to exclude
+          EXCLUDED_LABELS: 'dependabot,wip'
+        run: python src/mcp_server_mender/pr_metrics.py
 
-      - name: Create issue
+      - name: Create Issue from Report
         uses: peter-evans/create-issue-from-file@v4
         with:
-          title: Monthly PR metrics report (dev)
-          content-filepath: ./issue_metrics.md
+          title: Monthly PR Metrics Report
+          content-filepath: ./pr_metrics_report.md
+          # Optional: Assign the issue to your team
+          # team-assignees: my-team
