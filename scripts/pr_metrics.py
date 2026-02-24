@@ -9,7 +9,6 @@ def get_env_vars():
     """Get and validate required environment variables."""
     token = os.environ.get("GH_TOKEN")
     repo_name = os.environ.get("GITHUB_REPOSITORY")
-    # TEAM_MEMBERS is no longer required as we discover users dynamically
     excluded_labels_str = os.environ.get("EXCLUDED_LABELS", "")
 
     if not all([token, repo_name]):
@@ -18,44 +17,68 @@ def get_env_vars():
     excluded_labels = {label.strip() for label in excluded_labels_str.split(",") if label.strip()}
     return token, repo_name, excluded_labels
 
-def is_weekend(date):
-    """Check if a date is on a weekend."""
-    return date.weekday() >= 5
-
-def get_business_timedelta(start, end):
-    """Calculate the timedelta in business hours between two datetimes."""
+def calculate_working_time(start, end):
+    """
+    Calculate the total duration between start and end, excluding weekends (Saturday/Sunday).
+    Returns a timedelta.
+    """
     if not start or not end:
         return None
     if start.tzinfo is None: start = start.replace(tzinfo=timezone.utc)
     if end.tzinfo is None: end = end.replace(tzinfo=timezone.utc)
 
-    business_hours = 0
-    current_date = start
-    while current_date < end:
-        if not is_weekend(current_date):
-            business_hours += 1
-        current_date += timedelta(hours=1)
-    return timedelta(hours=business_hours)
+    if start > end:
+        return timedelta(0)
+
+    total_seconds = 0
+    current = start
+
+    # Iterate through time intervals, skipping weekends
+    while current < end:
+        # If current is a weekend, jump to the next Monday (or end of interval)
+        if current.weekday() >= 5: # 5=Sat, 6=Sun
+            next_day = (current + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            if next_day > end: 
+                current = end
+            else:
+                current = next_day
+            continue
+
+        # Current is a weekday. Calculate time until next day or end of interval.
+        next_day = (current + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        chunk_end = min(next_day, end)
+        
+        # Add the duration of this chunk
+        total_seconds += (chunk_end - current).total_seconds()
+        
+        # Move current forward
+        current = chunk_end
+
+    return timedelta(seconds=total_seconds)
 
 def format_timedelta(td):
     """Format a timedelta into a readable string like '3d 4h 15m'."""
     if td is None: return "None"
-    days = td.days
-    hours, remainder = divmod(td.seconds, 3600)
-    minutes, _ = divmod(remainder, 60)
-    if days > 0:
-        return f"{days}d {hours}h {minutes}m"
-    elif hours > 0:
-        return f"{hours}h {minutes}m"
-    else:
-        return f"{minutes}m"
-
-def get_stats(data):
-    """Calculate Average, Median, and 90th Percentile for a list of timedeltas."""
-    if not data:
-        return "None", "None", "None"
+    total_seconds = int(td.total_seconds())
+    if total_seconds == 0: return "0m"
     
-    seconds = [td.total_seconds() for td in data if td]
+    days = total_seconds // 86400
+    remainder = total_seconds % 86400
+    hours = remainder // 3600
+    remainder %= 3600
+    minutes = remainder // 60
+
+    parts = []
+    if days > 0: parts.append(f"{days}d")
+    if hours > 0: parts.append(f"{hours}h")
+    if minutes > 0: parts.append(f"{minutes}m")
+    
+    if not parts: return "<1m"
+    return " ".join(parts)
+
+def get_stats(data_list):
+    """Calculate Average, Median, and 90th Percentile for a list of timedeltas."""
+    seconds = [td.total_seconds() for td in data_list if td]
     if not seconds:
         return "None", "None", "None"
 
@@ -75,7 +98,12 @@ def analyze_pulls(repo, excluded_labels):
     pulls = repo.get_pulls(state='all', sort='created', direction='desc')
     
     processed_prs = []
-    user_stats = defaultdict(lambda: {"opened": 0, "reviewed": 0, "assigned": 0})
+    # User stats structure: 
+    # { user: { 'opened': 0, 'reviewed': 0, 'assigned': 0, 'review_times': [], 'close_times': [] } }
+    user_stats = defaultdict(lambda: {
+        "opened": 0, "reviewed": 0, "assigned": 0, 
+        "review_times": [], "close_times": []
+    })
 
     for pr in pulls:
         if pr.created_at < thirty_days_ago: break
@@ -91,38 +119,57 @@ def analyze_pulls(repo, excluded_labels):
             "created_at": pr.created_at,
             "time_to_first_review": None,
             "time_to_close": None,
-            "time_to_answer": None # Placeholder if we track comments later
+            "time_to_answer": None 
         }
 
-        # Track Author Activity
+        # --- Author Stats ---
         user_stats[pr.user.login]["opened"] += 1
 
-        # Track Assignee Activity
+        # --- Assignee Stats ---
         for assignee in pr.assignees:
             user_stats[assignee.login]["assigned"] += 1
 
-        # Calculate Time to Close
+        # --- Time to Close ---
         if pr.state == 'closed' and pr.closed_at:
-            pr_data["time_to_close"] = get_business_timedelta(pr.created_at, pr.closed_at)
+            ttc = calculate_working_time(pr.created_at, pr.closed_at)
+            pr_data["time_to_close"] = ttc
+            user_stats[pr.user.login]["close_times"].append(ttc)
 
-        # Process Reviews
+        # --- Review Timings ---
+        # Fetch timeline to find when reviews were requested
+        review_requests = {}
+        try:
+            # Getting timeline can be expensive, but necessary for accurate "time from request"
+            for event in pr.get_issue_events():
+                if event.event == "review_requested" and event.requested_reviewer:
+                    # Store the FIRST time a reviewer was requested
+                    reviewer_name = event.requested_reviewer.login
+                    if reviewer_name not in review_requests:
+                        review_requests[reviewer_name] = event.created_at
+        except Exception:
+            # Fallback if issue events fail (e.g. permissions)
+            pass
+
         reviews = list(pr.get_reviews())
         reviewers_in_pr = set()
         
         if reviews:
-            # Sort reviews by submitted_at just in case
             reviews.sort(key=lambda x: x.submitted_at)
             first_review = reviews[0]
-            pr_data["time_to_first_review"] = get_business_timedelta(pr.created_at, first_review.submitted_at)
-            # Use TTR as "Time to Answer" proxy for now
+            pr_data["time_to_first_review"] = calculate_working_time(pr.created_at, first_review.submitted_at)
             pr_data["time_to_answer"] = pr_data["time_to_first_review"]
 
             for review in reviews:
                 reviewer = review.user.login
-                # Exclude author from review stats on their own PR (though unlikely to happen)
                 if reviewer != pr.user.login and reviewer not in reviewers_in_pr:
                     user_stats[reviewer]["reviewed"] += 1
                     reviewers_in_pr.add(reviewer)
+
+                    # Calculate individual time to review (from request to submission)
+                    if reviewer in review_requests:
+                        requested_at = review_requests[reviewer]
+                        ttr = calculate_working_time(requested_at, review.submitted_at)
+                        user_stats[reviewer]["review_times"].append(ttr)
         
         processed_prs.append(pr_data)
     
@@ -163,17 +210,26 @@ def generate_report(repo_name, processed_prs, user_stats):
 
     # --- User Activity Table ---
     report.append("\n## Team Activity\n")
-    report.append("| User | PRs Opened | PRs Assigned | Reviews Given |")
-    report.append("|---|---|---|---|")
+    report.append("| User | PRs Opened | PRs Assigned | Reviews Given | Median Time to Review (Assigned -> Done) | Median Time to Close (As Author) |")
+    report.append("|---|---|---|---|---|---|")
     
-    # Filter active users (at least one activity)
+    # Filter active users
     active_users = {u: s for u, s in user_stats.items() if s["opened"] > 0 or s["assigned"] > 0 or s["reviewed"] > 0}
-    
-    # Sort by activity (opened + reviewed + assigned) descending
     sorted_users = sorted(active_users.items(), key=lambda x: (x[1]["opened"] + x[1]["reviewed"] + x[1]["assigned"]), reverse=True)
 
     for user, stats in sorted_users:
-        report.append(f"| {user} | {stats['opened']} | {stats['assigned']} | {stats['reviewed']} |")
+        # Calculate medians for individual stats
+        med_ttr = "None"
+        if stats["review_times"]:
+            med_seconds = statistics.median([t.total_seconds() for t in stats["review_times"]])
+            med_ttr = format_timedelta(timedelta(seconds=med_seconds))
+            
+        med_ttc = "None"
+        if stats["close_times"]:
+            med_seconds = statistics.median([t.total_seconds() for t in stats["close_times"]])
+            med_ttc = format_timedelta(timedelta(seconds=med_seconds))
+
+        report.append(f"| {user} | {stats['opened']} | {stats['assigned']} | {stats['reviewed']} | {med_ttr} | {med_ttc} |")
 
     # --- PR List Table ---
     report.append("\n## Processed Items\n")
@@ -186,7 +242,6 @@ def generate_report(repo_name, processed_prs, user_stats):
         ttc = format_timedelta(pr["time_to_close"])
         tta = format_timedelta(pr["time_to_answer"])
         
-        # Truncate title if too long for table
         title = pr["title"]
         if len(title) > 50:
             title = title[:47] + "..."
