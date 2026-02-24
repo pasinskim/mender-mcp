@@ -3,20 +3,20 @@ import os
 from datetime import datetime, timedelta, timezone
 from github import Github, Auth
 import statistics
+from collections import defaultdict
 
 def get_env_vars():
     """Get and validate required environment variables."""
     token = os.environ.get("GH_TOKEN")
     repo_name = os.environ.get("GITHUB_REPOSITORY")
-    team_members_str = os.environ.get("TEAM_MEMBERS")
+    # TEAM_MEMBERS is no longer required as we discover users dynamically
     excluded_labels_str = os.environ.get("EXCLUDED_LABELS", "")
 
-    if not all([token, repo_name, team_members_str]):
-        raise ValueError("Missing one or more required environment variables: GH_TOKEN, GITHUB_REPOSITORY, TEAM_MEMBERS")
+    if not all([token, repo_name]):
+        raise ValueError("Missing one or more required environment variables: GH_TOKEN, GITHUB_REPOSITORY")
 
-    team_members = {member.strip() for member in team_members_str.split(",") if member.strip()}
     excluded_labels = {label.strip() for label in excluded_labels_str.split(",") if label.strip()}
-    return token, repo_name, team_members, excluded_labels
+    return token, repo_name, excluded_labels
 
 def is_weekend(date):
     """Check if a date is on a weekend."""
@@ -39,147 +39,182 @@ def get_business_timedelta(start, end):
 
 def format_timedelta(td):
     """Format a timedelta into a readable string like '3d 4h 15m'."""
-    if td is None: return "N/A"
+    if td is None: return "None"
     days = td.days
     hours, remainder = divmod(td.seconds, 3600)
     minutes, _ = divmod(remainder, 60)
-    return f"{days}d {hours}h {minutes}m"
+    if days > 0:
+        return f"{days}d {hours}h {minutes}m"
+    elif hours > 0:
+        return f"{hours}h {minutes}m"
+    else:
+        return f"{minutes}m"
 
-def analyze_pulls(repo, team_members, excluded_labels):
+def get_stats(data):
+    """Calculate Average, Median, and 90th Percentile for a list of timedeltas."""
+    if not data:
+        return "None", "None", "None"
+    
+    seconds = [td.total_seconds() for td in data if td]
+    if not seconds:
+        return "None", "None", "None"
+
+    avg = statistics.mean(seconds)
+    med = statistics.median(seconds)
+    p90 = statistics.quantiles(seconds, n=10)[8] if len(seconds) >= 2 else seconds[0]
+
+    return (
+        format_timedelta(timedelta(seconds=avg)),
+        format_timedelta(timedelta(seconds=med)),
+        format_timedelta(timedelta(seconds=p90))
+    )
+
+def analyze_pulls(repo, excluded_labels):
     """Analyzes pull requests and returns structured stats."""
     thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
     pulls = repo.get_pulls(state='all', sort='created', direction='desc')
     
     processed_prs = []
-    member_stats = {member: {
-        "opened_count": 0, "reviewed_count": 0, "open_prs_count": 0, 
-        "assigned_for_review_count": 0, "time_to_first_review": [], 
-        "time_to_close": [], "lines_changed": []
-    } for member in team_members}
+    user_stats = defaultdict(lambda: {"opened": 0, "reviewed": 0, "assigned": 0})
 
     for pr in pulls:
         if pr.created_at < thirty_days_ago: break
         if any(label.name in excluded_labels for label in pr.labels): continue
 
         pr_data = {
-            "url": pr.html_url, "number": pr.number, "title": pr.title, "author": pr.user.login,
-            "state": pr.state, "created_at": pr.created_at, "lines": pr.additions + pr.deletions,
-            "time_to_first_review": None, "time_to_close": None
+            "title": pr.title,
+            "url": pr.html_url,
+            "number": pr.number,
+            "author": pr.user.login,
+            "assignees": [a.login for a in pr.assignees],
+            "state": pr.state,
+            "created_at": pr.created_at,
+            "time_to_first_review": None,
+            "time_to_close": None,
+            "time_to_answer": None # Placeholder if we track comments later
         }
 
-        author = pr.user.login
-        if author in team_members:
-            member_stats[author]["opened_count"] += 1
-            member_stats[author]["lines_changed"].append(pr_data["lines"])
-            if pr.state == 'open':
-                member_stats[author]["open_prs_count"] += 1
+        # Track Author Activity
+        user_stats[pr.user.login]["opened"] += 1
 
+        # Track Assignee Activity
+        for assignee in pr.assignees:
+            user_stats[assignee.login]["assigned"] += 1
+
+        # Calculate Time to Close
         if pr.state == 'closed' and pr.closed_at:
             pr_data["time_to_close"] = get_business_timedelta(pr.created_at, pr.closed_at)
-            if author in team_members:
-                member_stats[author]["time_to_close"].append(pr_data["time_to_close"])
-        
-        if pr.requested_reviewers:
-            for reviewer in pr.requested_reviewers:
-                if reviewer.login in team_members:
-                    member_stats[reviewer.login]["assigned_for_review_count"] += 1
 
+        # Process Reviews
         reviews = list(pr.get_reviews())
         reviewers_in_pr = set()
+        
         if reviews:
+            # Sort reviews by submitted_at just in case
+            reviews.sort(key=lambda x: x.submitted_at)
             first_review = reviews[0]
             pr_data["time_to_first_review"] = get_business_timedelta(pr.created_at, first_review.submitted_at)
-            
+            # Use TTR as "Time to Answer" proxy for now
+            pr_data["time_to_answer"] = pr_data["time_to_first_review"]
+
             for review in reviews:
                 reviewer = review.user.login
-                if reviewer in team_members and reviewer not in reviewers_in_pr:
-                    member_stats[reviewer]["reviewed_count"] += 1
+                # Exclude author from review stats on their own PR (though unlikely to happen)
+                if reviewer != pr.user.login and reviewer not in reviewers_in_pr:
+                    user_stats[reviewer]["reviewed"] += 1
                     reviewers_in_pr.add(reviewer)
-                    # Attribute first review time to the first team member who reviewed
-                    if len(reviewers_in_pr) == 1:
-                         member_stats[reviewer]["time_to_first_review"].append(pr_data["time_to_first_review"])
         
         processed_prs.append(pr_data)
     
-    return processed_prs, member_stats
+    return processed_prs, user_stats
 
-def generate_report(repo_name, processed_prs, member_stats):
+def generate_report(repo_name, processed_prs, user_stats):
     """Generates a markdown report from the processed PR data."""
-    
-    def get_avg_median_str(data, formatter=None):
-        if not data: return "N/A"
-        avg = statistics.mean(data)
-        med = statistics.median(data)
-        if formatter:
-            return f"{formatter(timedelta(seconds=avg))} / {formatter(timedelta(seconds=med))}"
-        return f"{avg:.1f} / {med:.1f}"
+    report = [f"# Issue Metrics for `{repo_name}`\n"]
 
-    report = [f"# PR Metrics Report for `{repo_name}`\n"]
+    # --- Metrics Summary Table ---
+    report.append("## Metrics Summary\n")
+    report.append("| Metric | Average | Median | 90th percentile |")
+    report.append("|---|---|---|---|")
 
-    # --- Repo Summary Table ---
-    closed_prs = [pr for pr in processed_prs if pr["state"] == "closed"]
-    times_to_review_s = [pr["time_to_first_review"].total_seconds() for pr in processed_prs if pr["time_to_first_review"]]
-    times_to_close_s = [pr["time_to_close"].total_seconds() for pr in closed_prs if pr["time_to_close"]]
-    lines_changed = [pr["lines"] for pr in processed_prs]
-    
-    report.append("## 📈 Repository Summary (Last 30 Days)\n")
-    report.append("| Metric | Value (Average / Median) |")
+    ttr_list = [pr["time_to_first_review"] for pr in processed_prs if pr["time_to_first_review"]]
+    ttc_list = [pr["time_to_close"] for pr in processed_prs if pr["time_to_close"]]
+    tta_list = [pr["time_to_answer"] for pr in processed_prs if pr["time_to_answer"]]
+
+    ttr_stats = get_stats(ttr_list)
+    ttc_stats = get_stats(ttc_list)
+    tta_stats = get_stats(tta_list)
+
+    report.append(f"| Time to first response | {ttr_stats[0]} | {ttr_stats[1]} | {ttr_stats[2]} |")
+    report.append(f"| Time to close | {ttc_stats[0]} | {ttc_stats[1]} | {ttc_stats[2]} |")
+    report.append(f"| Time to answer | {tta_stats[0]} | {tta_stats[1]} | {tta_stats[2]} |")
+
+    # --- Counts Table ---
+    open_count = sum(1 for pr in processed_prs if pr["state"] == "open")
+    closed_count = sum(1 for pr in processed_prs if pr["state"] == "closed")
+    total_count = len(processed_prs)
+
+    report.append("\n## Activity Counts\n")
+    report.append("| Metric | Count |")
     report.append("|---|---|")
-    report.append(f"| Open PRs | {len(processed_prs) - len(closed_prs)} |")
-    report.append(f"| Closed PRs | {len(closed_prs)} |")
-    report.append(f"| Time to First Review | {get_avg_median_str(times_to_review_s, format_timedelta)} |")
-    report.append(f"| Time to Close PR | {get_avg_median_str(times_to_close_s, format_timedelta)} |")
-    report.append(f"| PR Size (lines) | {get_avg_median_str(lines_changed)} |")
+    report.append(f"| Number of items that remain open | {open_count} |")
+    report.append(f"| Number of items closed | {closed_count} |")
+    report.append(f"| Total number of items created | {total_count} |")
 
-    # --- Individual Stats Table ---
-    report.append("\n---\n## 🧑‍💻 Team Member Statistics\n")
-    report.append("| Member | Opened | Reviewed | Assigned | Avg/Med TTR | Avg/Med TTC | Avg/Med Lines |")
+    # --- User Activity Table ---
+    report.append("\n## Team Activity\n")
+    report.append("| User | PRs Opened | PRs Assigned | Reviews Given |")
+    report.append("|---|---|---|---|")
+    
+    # Filter active users (at least one activity)
+    active_users = {u: s for u, s in user_stats.items() if s["opened"] > 0 or s["assigned"] > 0 or s["reviewed"] > 0}
+    
+    # Sort by activity (opened + reviewed + assigned) descending
+    sorted_users = sorted(active_users.items(), key=lambda x: (x[1]["opened"] + x[1]["reviewed"] + x[1]["assigned"]), reverse=True)
+
+    for user, stats in sorted_users:
+        report.append(f"| {user} | {stats['opened']} | {stats['assigned']} | {stats['reviewed']} |")
+
+    # --- PR List Table ---
+    report.append("\n## Processed Items\n")
+    report.append("| Title | URL | Assignee | Author | Time to first response | Time to close | Time to answer |")
     report.append("|---|---|---|---|---|---|---|")
-    for member, stats in member_stats.items():
-        ttr_s = [td.total_seconds() for td in stats["time_to_first_review"] if td]
-        ttc_s = [td.total_seconds() for td in stats["time_to_close"] if td]
-        lines = stats["lines_changed"]
-        report.append(f"| {member} | {stats['opened_count']} | {stats['reviewed_count']} | {stats['assigned_for_review_count']} | {get_avg_median_str(ttr_s, format_timedelta)} | {get_avg_median_str(ttc_s, format_timedelta)} | {get_avg_median_str(lines)} |")
 
-    # --- Long Running PRs Table ---
-    report.append("\n---\n## ⚠️ PRs Needing Attention\n")
-    long_review_prs = [pr for pr in processed_prs if pr["time_to_first_review"] and pr["time_to_first_review"] > timedelta(hours=48)]
-    long_close_prs = [pr for pr in closed_prs if pr["time_to_close"] and pr["time_to_close"] > timedelta(hours=48)]
+    for pr in processed_prs:
+        assignees_str = ", ".join(pr["assignees"]) if pr["assignees"] else "None"
+        ttr = format_timedelta(pr["time_to_first_review"])
+        ttc = format_timedelta(pr["time_to_close"])
+        tta = format_timedelta(pr["time_to_answer"])
+        
+        # Truncate title if too long for table
+        title = pr["title"]
+        if len(title) > 50:
+            title = title[:47] + "..."
+            
+        report.append(f"| {title} | [#{pr['number']}]({pr['url']}) | {assignees_str} | {pr['author']} | {ttr} | {ttc} | {tta} |")
 
-    report.append("### PRs > 48 business hours for first review\n")
-    if long_review_prs:
-        report.append("| PR | Author | Time to First Review |")
-        report.append("|---|---|---|")
-        for pr in long_review_prs:
-            report.append(f"| [#{pr['number']}]({pr['url']}) | {pr['author']} | {format_timedelta(pr['time_to_first_review'])} |")
-    else:
-        report.append("_None! 🎉_")
-
-    report.append("\n### PRs > 48 business hours to close\n")
-    if long_close_prs:
-        report.append("| PR | Author | Time to Close |")
-        report.append("|---|---|---|")
-        for pr in long_close_prs:
-            report.append(f"| [#{pr['number']}]({pr['url']}) | {pr['author']} | {format_timedelta(pr['time_to_close'])} |")
-    else:
-        report.append("_None! 🎉_")
-
+    report.append(f"\n_Report generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_")
     return "\n".join(report)
 
 def main():
     """Main function to generate PR metrics report."""
-    token, repo_name, team_members, excluded_labels = get_env_vars()
-    auth = Auth.Token(token)
-    g = Github(auth=auth)
-    repo = g.get_repo(repo_name)
+    try:
+        token, repo_name, excluded_labels = get_env_vars()
+        auth = Auth.Token(token)
+        g = Github(auth=auth)
+        repo = g.get_repo(repo_name)
 
-    processed_prs, member_stats = analyze_pulls(repo, team_members, excluded_labels)
-    report_md = generate_report(repo_name, processed_prs, member_stats)
+        print(f"Analyzing repository: {repo_name}")
+        processed_prs, user_stats = analyze_pulls(repo, excluded_labels)
+        report_md = generate_report(repo_name, processed_prs, user_stats)
 
-    with open("pr_metrics_report.md", "w") as f:
-        f.write(report_md)
+        with open("pr_metrics_report.md", "w") as f:
+            f.write(report_md)
 
-    print("Successfully generated PR metrics report.")
+        print("Successfully generated PR metrics report.")
+    except Exception as e:
+        print(f"Error: {e}")
+        exit(1)
 
 if __name__ == "__main__":
     main()
