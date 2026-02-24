@@ -422,4 +422,4 @@ Contributions are welcome! Please read our contributing guidelines and submit pu
 
 ## Issues Metrics 
 
-This is an example of how to test issues metrics. 
+This is an example of how to test issues metrics. It is PoC for further use with other repositories. 
