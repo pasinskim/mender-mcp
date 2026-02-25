@@ -177,7 +177,7 @@ def analyze_pulls(repo, excluded_labels):
 
 def generate_report(repo_name, processed_prs, user_stats):
     """Generates a markdown report from the processed PR data."""
-    report = [f"# Issue Metrics for `{repo_name}`\n"]
+    report = [f"# PR Metrics for `{repo_name}`\n"]
 
     # --- Metrics Summary Table ---
     report.append("## Metrics Summary\n")
@@ -204,9 +204,9 @@ def generate_report(repo_name, processed_prs, user_stats):
     report.append("\n## Activity Counts\n")
     report.append("| Metric | Count |")
     report.append("|---|---|")
-    report.append(f"| Number of items that remain open | {open_count} |")
-    report.append(f"| Number of items closed | {closed_count} |")
-    report.append(f"| Total number of items created | {total_count} |")
+    report.append(f"| Number of PRs that remain open | {open_count} |")
+    report.append(f"| Number of PRs closed | {closed_count} |")
+    report.append(f"| Total number of PRs created | {total_count} |")
 
     # --- User Activity Table ---
     report.append("\n## Team Activity\n")
