@@ -37,6 +37,7 @@ jobs:
       - name: Run PR Metrics Script
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
           EXCLUDED_LABELS: ${{ inputs.excluded-labels }}
         run: python scripts/pr_metrics.py
 

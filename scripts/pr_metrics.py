@@ -84,7 +84,12 @@ def get_stats(data_list):
 
     avg = statistics.mean(seconds)
     med = statistics.median(seconds)
-    p90 = statistics.quantiles(seconds, n=10)[8] if len(seconds) >= 2 else seconds[0]
+    
+    # Calculate 90th percentile safely
+    if len(seconds) >= 2:
+        p90 = statistics.quantiles(seconds, n=10)[8]
+    else:
+        p90 = seconds[0]
 
     return (
         format_timedelta(timedelta(seconds=avg)),
@@ -139,7 +144,7 @@ def analyze_pulls(repo, excluded_labels):
         # Fetch timeline to find when reviews were requested
         review_requests = {}
         try:
-            # Getting timeline can be expensive, but necessary for accurate "time from request"
+            # NOTE: Getting timeline can be expensive (API calls), but necessary for accurate "time from request"
             for event in pr.get_issue_events():
                 if event.event == "review_requested" and event.requested_reviewer:
                     # Store the FIRST time a reviewer was requested
@@ -150,11 +155,14 @@ def analyze_pulls(repo, excluded_labels):
             # Fallback if issue events fail (e.g. permissions)
             pass
 
+        # NOTE: pr.get_reviews() issues an API request per pull request. 
+        # For repositories with a high volume of PRs, this may be expensive.
         reviews = list(pr.get_reviews())
         reviewers_in_pr = set()
         
         if reviews:
-            reviews.sort(key=lambda x: x.submitted_at)
+            # Sort reviews by submitted_at, handling potential None values defensively
+            reviews.sort(key=lambda x: x.submitted_at or datetime.min.replace(tzinfo=timezone.utc))
             first_review = reviews[0]
             pr_data["time_to_first_review"] = calculate_working_time(pr.created_at, first_review.submitted_at)
             pr_data["time_to_answer"] = pr_data["time_to_first_review"]
@@ -232,7 +240,7 @@ def generate_report(repo_name, processed_prs, user_stats):
         report.append(f"| {user} | {stats['opened']} | {stats['assigned']} | {stats['reviewed']} | {med_ttr} | {med_ttc} |")
 
     # --- PR List Table ---
-    report.append("\n## Processed Items\n")
+    report.append("\n## Processed PRs\n")
     report.append("| Title | URL | Assignee | Author | Time to first response | Time to close | Time to answer |")
     report.append("|---|---|---|---|---|---|---|")
 
@@ -248,7 +256,7 @@ def generate_report(repo_name, processed_prs, user_stats):
             
         report.append(f"| {title} | [#{pr['number']}]({pr['url']}) | {assignees_str} | {pr['author']} | {ttr} | {ttc} | {tta} |")
 
-    report.append(f"\n_Report generated on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}_")
+    report.append(f"\n_Report generated on {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}_")
     return "\n".join(report)
 
 def main():
