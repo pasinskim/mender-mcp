@@ -10,12 +10,20 @@ def get_env_vars():
     token = os.environ.get("GH_TOKEN")
     repo_name = os.environ.get("GITHUB_REPOSITORY")
     excluded_labels_str = os.environ.get("EXCLUDED_LABELS", "")
+    sla_hours_str = os.environ.get("ACTIONABLE_SLA_HOURS", "48")
 
     if not all([token, repo_name]):
         raise ValueError("Missing one or more required environment variables: GH_TOKEN, GITHUB_REPOSITORY")
 
     excluded_labels = {label.strip() for label in excluded_labels_str.split(",") if label.strip()}
-    return token, repo_name, excluded_labels
+    
+    try:
+        sla_hours = int(sla_hours_str)
+    except ValueError:
+        print(f"Warning: Invalid ACTIONABLE_SLA_HOURS '{sla_hours_str}'. Defaulting to 48.")
+        sla_hours = 48
+        
+    return token, repo_name, excluded_labels, sla_hours
 
 def calculate_working_time(start, end):
     """
@@ -183,7 +191,7 @@ def analyze_pulls(repo, excluded_labels):
     
     return processed_prs, user_stats
 
-def generate_report(repo_name, processed_prs, user_stats):
+def generate_report(repo_name, processed_prs, user_stats, sla_hours):
     """Generates a markdown report from the processed PR data."""
     report = [f"# PR Metrics for `{repo_name}`\n"]
 
@@ -239,6 +247,80 @@ def generate_report(repo_name, processed_prs, user_stats):
 
         report.append(f"| {user} | {stats['opened']} | {stats['assigned']} | {stats['reviewed']} | {med_ttr} | {med_ttc} |")
 
+    # --- SLA Violations Table ---
+    report.append(f"\n## ⚠️ PRs Needing Attention (>{sla_hours} business hours)\n")
+    
+    sla_td = timedelta(hours=sla_hours)
+    
+    # 1. Slow Reviews: 
+    #    - Closed/Reviewed PRs where TTR > SLA
+    #    - Open PRs with NO reviews where Age (working hours) > SLA
+    
+    slow_review_prs = []
+    current_time = datetime.now(timezone.utc)
+    
+    for pr in processed_prs:
+        # Case A: Review happened but took too long
+        if pr["time_to_first_review"] and pr["time_to_first_review"] > sla_td:
+            slow_review_prs.append({
+                "pr": pr, 
+                "reason": f"Review took {format_timedelta(pr['time_to_first_review'])}"
+            })
+        # Case B: No review yet, and PR age (working time) > SLA
+        elif not pr["time_to_first_review"]:
+             # Calculate current age in working hours
+             age_working_hours = calculate_working_time(pr["created_at"], current_time)
+             if age_working_hours and age_working_hours > sla_td:
+                 slow_review_prs.append({
+                     "pr": pr,
+                     "reason": f"Waiting for review ({format_timedelta(age_working_hours)})"
+                 })
+
+    if slow_review_prs:
+        report.append("### Slow Reviews\n")
+        report.append("| PR | Author | Issue |")
+        report.append("|---|---|---|")
+        for item in slow_review_prs:
+            pr = item["pr"]
+            report.append(f"| [#{pr['number']}]({pr['url']}) | {pr['author']} | {item['reason']} |")
+    else:
+        report.append("### Slow Reviews\n")
+        report.append("_None! 🎉_")
+
+
+    # 2. Slow Closes:
+    #    - Closed PRs where TTC > SLA
+    #    - Open PRs where Age (working hours) > SLA
+    
+    slow_close_prs = []
+    
+    for pr in processed_prs:
+        # Case A: Closed but took too long
+        if pr["time_to_close"] and pr["time_to_close"] > sla_td:
+             slow_close_prs.append({
+                "pr": pr, 
+                "reason": f"Took {format_timedelta(pr['time_to_close'])} to close"
+            })
+        # Case B: Still open and age > SLA
+        elif pr["state"] == "open":
+             age_working_hours = calculate_working_time(pr["created_at"], current_time)
+             if age_working_hours and age_working_hours > sla_td:
+                 slow_close_prs.append({
+                     "pr": pr,
+                     "reason": f"Open for {format_timedelta(age_working_hours)}"
+                 })
+
+    report.append("\n### Slow Resolutions\n")
+    if slow_close_prs:
+        report.append("| PR | Author | Issue |")
+        report.append("|---|---|---|")
+        for item in slow_close_prs:
+            pr = item["pr"]
+            report.append(f"| [#{pr['number']}]({pr['url']}) | {pr['author']} | {item['reason']} |")
+    else:
+        report.append("_None! 🎉_")
+
+
     # --- PR List Table ---
     report.append("\n## Processed PRs\n")
     report.append("| Title | URL | Assignee | Author | Time to first response | Time to close | Time to answer |")
@@ -262,14 +344,14 @@ def generate_report(repo_name, processed_prs, user_stats):
 def main():
     """Main function to generate PR metrics report."""
     try:
-        token, repo_name, excluded_labels = get_env_vars()
+        token, repo_name, excluded_labels, sla_hours = get_env_vars()
         auth = Auth.Token(token)
         g = Github(auth=auth)
         repo = g.get_repo(repo_name)
 
         print(f"Analyzing repository: {repo_name}")
         processed_prs, user_stats = analyze_pulls(repo, excluded_labels)
-        report_md = generate_report(repo_name, processed_prs, user_stats)
+        report_md = generate_report(repo_name, processed_prs, user_stats, sla_hours)
 
         with open("pr_metrics_report.md", "w") as f:
             f.write(report_md)

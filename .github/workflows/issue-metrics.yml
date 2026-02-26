@@ -7,6 +7,11 @@ on:
         required: false
         type: string
         default: 'dependabot,wip'
+      actionable-sla-hours:
+        description: 'Threshold in business hours for actionable PRs (slow review/close)'
+        required: false
+        type: string
+        default: '48'
     secrets:
       GH_TOKEN:
         required: true
@@ -39,6 +44,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           EXCLUDED_LABELS: ${{ inputs.excluded-labels }}
+          ACTIONABLE_SLA_HOURS: ${{ inputs.actionable-sla-hours }}
         run: python scripts/pr_metrics.py
 
       - name: Create Issue from Report
