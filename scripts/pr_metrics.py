@@ -251,23 +251,15 @@ def generate_report(repo_name, processed_prs, user_stats, sla_hours):
     report.append(f"\n## ⚠️ PRs Needing Attention (>{sla_hours} business hours)\n")
     
     sla_td = timedelta(hours=sla_hours)
+    current_time = datetime.now(timezone.utc)
     
     # 1. Slow Reviews: 
-    #    - Closed/Reviewed PRs where TTR > SLA
     #    - Open PRs with NO reviews where Age (working hours) > SLA
     
     slow_review_prs = []
-    current_time = datetime.now(timezone.utc)
     
     for pr in processed_prs:
-        # Case A: Review happened but took too long
-        if pr["time_to_first_review"] and pr["time_to_first_review"] > sla_td:
-            slow_review_prs.append({
-                "pr": pr, 
-                "reason": f"Review took {format_timedelta(pr['time_to_first_review'])}"
-            })
-        # Case B: No review yet, and PR age (working time) > SLA
-        elif not pr["time_to_first_review"]:
+        if pr["state"] == "open" and not pr["time_to_first_review"]:
              # Calculate current age in working hours
              age_working_hours = calculate_working_time(pr["created_at"], current_time)
              if age_working_hours and age_working_hours > sla_td:
@@ -277,32 +269,24 @@ def generate_report(repo_name, processed_prs, user_stats, sla_hours):
                  })
 
     if slow_review_prs:
-        report.append("### Slow Reviews\n")
+        report.append("### Slow Reviews (Open & Waiting)\n")
         report.append("| PR | Author | Issue |")
         report.append("|---|---|---|")
         for item in slow_review_prs:
             pr = item["pr"]
             report.append(f"| [#{pr['number']}]({pr['url']}) | {pr['author']} | {item['reason']} |")
     else:
-        report.append("### Slow Reviews\n")
+        report.append("### Slow Reviews (Open & Waiting)\n")
         report.append("_None! 🎉_")
 
 
-    # 2. Slow Closes:
-    #    - Closed PRs where TTC > SLA
+    # 2. Slow Resolutions:
     #    - Open PRs where Age (working hours) > SLA
     
     slow_close_prs = []
     
     for pr in processed_prs:
-        # Case A: Closed but took too long
-        if pr["time_to_close"] and pr["time_to_close"] > sla_td:
-             slow_close_prs.append({
-                "pr": pr, 
-                "reason": f"Took {format_timedelta(pr['time_to_close'])} to close"
-            })
-        # Case B: Still open and age > SLA
-        elif pr["state"] == "open":
+        if pr["state"] == "open":
              age_working_hours = calculate_working_time(pr["created_at"], current_time)
              if age_working_hours and age_working_hours > sla_td:
                  slow_close_prs.append({
@@ -310,7 +294,7 @@ def generate_report(repo_name, processed_prs, user_stats, sla_hours):
                      "reason": f"Open for {format_timedelta(age_working_hours)}"
                  })
 
-    report.append("\n### Slow Resolutions\n")
+    report.append("\n### Slow Resolutions (Open)\n")
     if slow_close_prs:
         report.append("| PR | Author | Issue |")
         report.append("|---|---|---|")
